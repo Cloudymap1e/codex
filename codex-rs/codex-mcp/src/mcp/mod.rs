@@ -240,6 +240,7 @@ pub async fn read_mcp_resource(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 
@@ -305,6 +306,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 

@@ -23,6 +23,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::SendElicitation;
+use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
@@ -30,22 +31,38 @@ use rmcp::model::RequestId;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 
+#[derive(Debug, Clone)]
+pub struct ElicitationReviewRequest {
+    pub server_name: String,
+    pub request_id: RequestId,
+    pub elicitation: CreateElicitationRequestParams,
+}
+
+pub type ElicitationReviewer = Arc<
+    dyn Fn(ElicitationReviewRequest) -> BoxFuture<'static, Result<Option<ElicitationResponse>>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub(crate) struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
+    reviewer: Option<ElicitationReviewer>,
 }
 
 impl ElicitationRequestManager {
     pub(crate) fn new(
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
+        reviewer: Option<ElicitationReviewer>,
     ) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
+            reviewer,
         }
     }
 
@@ -72,12 +89,14 @@ impl ElicitationRequestManager {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
         let permission_profile = self.permission_profile.clone();
+        let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
             let permission_profile = permission_profile.clone();
+            let reviewer = reviewer.clone();
             async move {
                 let approval_policy = approval_policy
                     .lock()
@@ -103,6 +122,17 @@ impl ElicitationRequestManager {
                         content: None,
                         meta: None,
                     });
+                }
+
+                if let Some(reviewer) = reviewer.as_ref() {
+                    let request = ElicitationReviewRequest {
+                        server_name: server_name.clone(),
+                        request_id: id.clone(),
+                        elicitation: elicitation.clone(),
+                    };
+                    if let Some(response) = reviewer(request).await? {
+                        return Ok(response);
+                    }
                 }
 
                 let request = match elicitation {

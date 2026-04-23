@@ -1,4 +1,6 @@
 pub use connection_manager::McpConnectionManager;
+pub use elicitation::ElicitationReviewRequest;
+pub use elicitation::ElicitationReviewer;
 pub use rmcp_client::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use runtime::McpRuntimeEnvironment;
 pub use runtime::SandboxState;
