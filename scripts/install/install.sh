@@ -645,28 +645,28 @@ fi
 
 if [ "$os" = "darwin" ]; then
   if [ "$arch" = "aarch64" ]; then
-    npm_tag="darwin-arm64"
+    platform_tag="darwin-arm64"
     vendor_target="aarch64-apple-darwin"
     platform_label="macOS (Apple Silicon)"
   else
-    npm_tag="darwin-x64"
+    platform_tag="darwin-x64"
     vendor_target="x86_64-apple-darwin"
     platform_label="macOS (Intel)"
   fi
 else
   if [ "$arch" = "aarch64" ]; then
-    npm_tag="linux-arm64"
+    platform_tag="linux-arm64"
     vendor_target="aarch64-unknown-linux-musl"
     platform_label="Linux (ARM64)"
   else
-    npm_tag="linux-x64"
+    platform_tag="linux-x64"
     vendor_target="x86_64-unknown-linux-musl"
     platform_label="Linux (x64)"
   fi
 fi
 
 resolved_version="$(resolve_version)"
-asset="codex-standalone-$npm_tag-$resolved_version.tar.gz"
+asset="codex-standalone-$platform_tag-$resolved_version.tar.gz"
 download_url="$(release_url_for_asset "$asset" "$resolved_version")"
 release_name="$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"

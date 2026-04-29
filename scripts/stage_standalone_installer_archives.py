@@ -19,32 +19,32 @@ WORKFLOW_NAME = ".github/workflows/rust-release.yml"
 
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
-        "npm_tag": "linux-x64",
+        "platform_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
     },
     "codex-linux-arm64": {
-        "npm_tag": "linux-arm64",
+        "platform_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
     },
     "codex-darwin-x64": {
-        "npm_tag": "darwin-x64",
+        "platform_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
     },
     "codex-darwin-arm64": {
-        "npm_tag": "darwin-arm64",
+        "platform_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
     },
     "codex-win32-x64": {
-        "npm_tag": "win32-x64",
+        "platform_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
     },
     "codex-win32-arm64": {
-        "npm_tag": "win32-arm64",
+        "platform_tag": "win32-arm64",
         "target_triple": "aarch64-pc-windows-msvc",
         "os": "win32",
     },
@@ -203,7 +203,7 @@ def main() -> int:
 
         for package in sorted(set(packages)):
             package_config = CODEX_PLATFORM_PACKAGES[package]
-            platform_tag = package_config["npm_tag"]
+            platform_tag = package_config["platform_tag"]
             target = package_config["target_triple"]
             is_windows = package_config["os"] == "win32"
             output_path = output_dir / archive_name(platform_tag, args.release_version)
