@@ -120,6 +120,8 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSkillReadParams;
+use codex_app_server_protocol::PluginSkillReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
@@ -1120,6 +1122,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginRead { request_id, params } => {
                 self.plugin_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginSkillRead { request_id, params } => {
+                self.plugin_skill_read(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::AppsList { request_id, params } => {
@@ -8766,7 +8772,6 @@ fn plugin_skills_to_info(
                 }
             }),
             path: Some(skill.path_to_skills_md.clone()),
-            contents: None,
             enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()

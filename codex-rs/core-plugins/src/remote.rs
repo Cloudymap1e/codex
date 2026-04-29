@@ -75,7 +75,6 @@ pub struct RemotePluginSkill {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
-    pub contents: Option<String>,
     pub enabled: bool,
 }
 
@@ -445,24 +444,6 @@ pub async fn fetch_remote_plugin_detail(
         marketplace_name,
         plugin_id,
         /*include_download_urls*/ false,
-        /*include_skill_contents*/ false,
-    )
-    .await
-}
-
-pub async fn fetch_remote_plugin_detail_with_skill_contents(
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    marketplace_name: &str,
-    plugin_id: &str,
-) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
-    fetch_remote_plugin_detail_with_download_url_option(
-        config,
-        auth,
-        marketplace_name,
-        plugin_id,
-        /*include_download_urls*/ false,
-        /*include_skill_contents*/ true,
     )
     .await
 }
@@ -479,7 +460,6 @@ pub async fn fetch_remote_plugin_detail_with_download_urls(
         marketplace_name,
         plugin_id,
         /*include_download_urls*/ true,
-        /*include_skill_contents*/ false,
     )
     .await
 }
@@ -526,7 +506,6 @@ async fn fetch_remote_plugin_detail_with_download_url_option(
     marketplace_name: &str,
     plugin_id: &str,
     include_download_urls: bool,
-    include_skill_contents: bool,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let scope = RemotePluginScope::from_marketplace_name(marketplace_name).ok_or_else(|| {
@@ -551,7 +530,6 @@ async fn fetch_remote_plugin_detail_with_download_url_option(
         marketplace_name.to_string(),
         plugin_id,
         plugin,
-        include_skill_contents,
     )
     .await
 }
@@ -563,7 +541,6 @@ async fn build_remote_plugin_detail(
     marketplace_name: String,
     plugin_id: &str,
     plugin: RemotePluginDirectoryItem,
-    include_skill_contents: bool,
 ) -> Result<RemotePluginDetail, RemotePluginCatalogError> {
     let installed_plugin = fetch_installed_plugins_for_scope(config, auth, scope)
         .await?
@@ -579,22 +556,11 @@ async fn build_remote_plugin_detail(
                 .collect::<HashSet<_>>()
         })
         .unwrap_or_default();
-    let mut skills = Vec::with_capacity(plugin.release.skills.len());
-    for skill in &plugin.release.skills {
-        let contents = if include_skill_contents {
-            fetch_remote_plugin_skill_detail(
-                config,
-                Some(auth),
-                &marketplace_name,
-                plugin_id,
-                &skill.name,
-            )
-            .await?
-            .contents
-        } else {
-            None
-        };
-        skills.push(RemotePluginSkill {
+    let skills = plugin
+        .release
+        .skills
+        .iter()
+        .map(|skill| RemotePluginSkill {
             name: skill.name.clone(),
             description: skill.description.clone(),
             short_description: skill
@@ -602,10 +568,9 @@ async fn build_remote_plugin_detail(
                 .as_ref()
                 .and_then(|interface| interface.short_description.clone()),
             interface: remote_skill_interface_to_info(skill.interface.clone()),
-            contents,
             enabled: !disabled_skill_names.contains(&skill.name),
-        });
-    }
+        })
+        .collect();
 
     Ok(RemotePluginDetail {
         marketplace_name,

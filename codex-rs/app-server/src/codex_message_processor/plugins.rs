@@ -265,17 +265,16 @@ impl CodexMessageProcessor {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
                 validate_remote_plugin_id(&plugin_name)?;
-                let remote_detail =
-                    codex_core_plugins::remote::fetch_remote_plugin_detail_with_skill_contents(
-                        &remote_plugin_service_config,
-                        auth.as_ref(),
-                        &remote_marketplace_name,
-                        &plugin_name,
-                    )
-                    .await
-                    .map_err(|err| {
-                        remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
-                    })?;
+                let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
+                    &remote_plugin_service_config,
+                    auth.as_ref(),
+                    &remote_marketplace_name,
+                    &plugin_name,
+                )
+                .await
+                .map_err(|err| {
+                    remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin details")
+                })?;
                 let plugin_apps = remote_detail
                     .app_ids
                     .iter()
@@ -294,6 +293,61 @@ impl CodexMessageProcessor {
         };
 
         Ok(PluginReadResponse { plugin })
+    }
+
+    pub(super) async fn plugin_skill_read(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PluginSkillReadParams,
+    ) {
+        let result = self.plugin_skill_read_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn plugin_skill_read_response(
+        &self,
+        params: PluginSkillReadParams,
+    ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
+        let PluginSkillReadParams {
+            remote_marketplace_name,
+            plugin_name,
+            skill_name,
+        } = params;
+
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return Err(invalid_request(format!(
+                "remote plugin skill read is not enabled for marketplace {remote_marketplace_name}"
+            )));
+        }
+        validate_remote_plugin_id(&plugin_name)?;
+        if skill_name.is_empty() {
+            return Err(invalid_request(
+                "invalid remote plugin skill name: cannot be empty",
+            ));
+        }
+
+        let auth = self.auth_manager.auth().await;
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        let remote_skill_detail = codex_core_plugins::remote::fetch_remote_plugin_skill_detail(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_marketplace_name,
+            &plugin_name,
+            &skill_name,
+        )
+        .await
+        .map_err(|err| {
+            remote_plugin_catalog_error_to_jsonrpc(err, "read remote plugin skill details")
+        })?;
+
+        Ok(PluginSkillReadResponse {
+            contents: remote_skill_detail.contents,
+        })
     }
 
     pub(super) async fn plugin_install(
@@ -762,7 +816,6 @@ fn remote_plugin_detail_to_info(
                 short_description: skill.short_description,
                 interface: skill.interface,
                 path: None,
-                contents: skill.contents,
                 enabled: skill.enabled,
             })
             .collect(),
