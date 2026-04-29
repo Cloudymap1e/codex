@@ -306,10 +306,6 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_notification(&self, notification: ServerNotification) {
-        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
-    }
-
     pub fn track_server_request(&self, connection_id: u64, request: ServerRequest) {
         self.record_fact(AnalyticsFact::ServerRequest {
             connection_id,
@@ -321,6 +317,21 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::ServerResponse {
             response: Box::new(response),
         });
+    }
+
+    pub fn track_notification(&self, notification: ServerNotification) {
+        if !matches!(
+            notification,
+            ServerNotification::TurnStarted(_)
+                | ServerNotification::TurnCompleted(_)
+                | ServerNotification::ItemStarted(_)
+                | ServerNotification::ItemCompleted(_)
+                | ServerNotification::ItemGuardianApprovalReviewStarted(_)
+                | ServerNotification::ItemGuardianApprovalReviewCompleted(_)
+        ) {
+            return;
+        }
+        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
     }
 }
 
