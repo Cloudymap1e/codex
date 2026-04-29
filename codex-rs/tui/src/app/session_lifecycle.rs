@@ -385,13 +385,8 @@ impl App {
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.overlay = None;
-        self.transcript_cells.clear();
-        self.deferred_history_lines.clear();
+        self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
-        self.has_emitted_history_lines = false;
-        self.backtrack = BacktrackState::default();
-        self.backtrack_render_pending = false;
         Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         Ok(())
     }
@@ -622,7 +617,8 @@ impl App {
 
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.current_service_tier();
+        config.service_tier = self.chat_widget.configured_service_tier();
+        config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         config
     }
     pub(super) async fn resume_target_session(

@@ -47,13 +47,13 @@ mod fork_thread;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
+#[cfg(not(target_os = "windows"))]
+mod hooks_mcp;
 mod image_rollout;
 mod items;
-mod js_repl;
 mod json_result;
 mod live_cli;
 mod live_reload;
-mod memories;
 mod model_overrides;
 mod model_switching;
 mod model_visible_layout;

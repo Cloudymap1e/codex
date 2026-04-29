@@ -15,6 +15,7 @@ use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
@@ -22,12 +23,16 @@ use assert_matches::assert_matches;
 
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
@@ -36,6 +41,7 @@ use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprov
 use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
 use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -61,17 +67,18 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnContextItem;
@@ -1576,7 +1583,7 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
     app.config.sqlite_home = codex_home.path().to_path_buf();
 
     let memory_root = codex_home.path().join("memories");
-    let extensions_root = codex_home.path().join("memories_extensions");
+    let extensions_root = memory_root.join("extensions");
     std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
     std::fs::create_dir_all(&extensions_root)?;
     std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
@@ -1591,18 +1598,17 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
     app.reset_memories_with_app_server(&mut app_server).await;
 
     assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
-    assert_eq!(std::fs::read_dir(&extensions_root)?.count(), 0);
 
     app_server.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> Result<()> {
+async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
         .await;
@@ -1616,11 +1622,11 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
     );
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.config.permissions.approval_policy.value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
@@ -1628,29 +1634,32 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
             .permissions
             .approval_policy
             .value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
             .config_ref()
             .permissions
-            .sandbox_policy
-            .get(),
-        &guardian_approvals.sandbox_policy
+            .permission_profile(),
+        auto_review.permission_profile
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(app.runtime_sandbox_policy_override, None);
+    assert_eq!(
+        app.runtime_permission_profile_override,
+        Some(auto_review.permission_profile.clone())
+    );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1699,21 +1708,20 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
     app.config
         .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)?;
     app.config
         .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())?;
+        .set_permission_profile(PermissionProfile::workspace_write())?;
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_sandbox_policy(SandboxPolicy::new_workspace_write_policy())?;
+        .set_permission_profile(PermissionProfile::workspace_write())?;
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -1742,6 +1750,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1777,7 +1786,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
     let config_toml_path = codex_home.path().join("config.toml").abs();
     let config_toml = "approvals_reviewer = \"user\"\n";
     std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -1796,31 +1805,31 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.config.permissions.approval_policy.value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
             .config_ref()
             .permissions
-            .sandbox_policy
-            .get(),
-        &guardian_approvals.sandbox_policy
+            .permission_profile(),
+        auto_review.permission_profile
     );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1878,6 +1887,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1904,7 +1914,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
     app.active_profile = Some("guardian".to_string());
     let config_toml_path = codex_home.path().join("config.toml").abs();
     let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
@@ -1924,19 +1934,20 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: None,
+            permission_profile: Some(auto_review.permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1998,9 +2009,9 @@ guardian_approval = true
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -2024,6 +2035,7 @@ guardian_approval = true
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2077,9 +2089,9 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -2091,13 +2103,10 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
             .features
             .enabled(Feature::GuardianApproval)
     );
-    assert_eq!(
-        app.config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
+        ApprovalsReviewer::AutoReview
     );
     assert!(
         op_rx.try_recv().is_err(),
@@ -2208,7 +2217,7 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             /*capacity*/ 1,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2367,7 +2376,7 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2462,7 +2471,7 @@ async fn inactive_thread_exec_approval_preserves_context() {
     );
     assert_eq!(
         additional_permissions,
-        Some(PermissionProfile {
+        Some(CoreAdditionalPermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
@@ -2520,6 +2529,75 @@ async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
             script.to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn inactive_thread_file_change_approval_recovers_buffered_changes() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-approval".to_string(),
+            item: ThreadItem::FileChange {
+                id: "patch-approval".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "README.md".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: codex_app_server_protocol::PatchApplyStatus::InProgress,
+            },
+        }),
+    )
+    .await
+    .expect("enqueue file change item");
+
+    let request = ServerRequest::FileChangeRequestApproval {
+        request_id: AppServerRequestId::Integer(9),
+        params: FileChangeRequestApprovalParams {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-approval".to_string(),
+            item_id: "patch-approval".to_string(),
+            reason: Some("command failed; retry without sandbox?".to_string()),
+            grant_root: None,
+        },
+    };
+
+    let request = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await
+        .expect("expected file change approval request");
+
+    let ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
+        changes, reason, ..
+    }) = &request
+    else {
+        panic!("expected apply-patch approval request");
+    };
+    assert_eq!(
+        changes,
+        &HashMap::from([(
+            PathBuf::from("README.md"),
+            FileChange::Add {
+                content: "hello\n".to_string(),
+            },
+        )])
+    );
+    assert_eq!(
+        reason,
+        &Some("command failed; retry without sandbox?".to_string())
+    );
+
+    app.push_thread_interactive_request(request);
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected patch preview history cell, saw {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+    assert!(rendered.contains("• Added README.md (+1 -0)"));
+    assert!(rendered.contains("1 +hello"));
 }
 
 #[tokio::test]
@@ -2589,7 +2667,7 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             /*capacity*/ 4,
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::workspace_write(),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2642,7 +2720,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2659,6 +2737,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     );
 
     let rollout_path = temp_dir.path().join("agent-rollout.jsonl");
+    let permission_profile = PermissionProfile::workspace_write();
     let turn_context = TurnContextItem {
         turn_id: None,
         trace_id: None,
@@ -2666,7 +2745,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         current_date: None,
         timezone: None,
         approval_policy: primary_session.approval_policy,
-        sandbox_policy: primary_session.sandbox_policy.clone(),
+        sandbox_policy: permission_profile
+            .to_legacy_sandbox_policy(test_path_buf("/tmp/agent").as_path())
+            .expect("workspace profile must be legacy-compatible"),
+        permission_profile: Some(permission_profile),
         network: None,
         file_system_sandbox_policy: None,
         model: "gpt-agent".to_string(),
@@ -2753,7 +2835,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
         ThreadId::from_string("00000000-0000-0000-0000-000000000302").expect("valid thread");
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::workspace_write(),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2807,6 +2889,61 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     assert_eq!(session.model, primary_session.model);
 
     Ok(())
+}
+
+/// `thread/read` is metadata/replay hydration and does not return a fresh
+/// server-authored `PermissionProfile`, so it must not reuse the cached primary
+/// session profile after swapping in the read thread's cwd.
+#[tokio::test]
+async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
+    let mut app = make_test_app().await;
+    let main_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000401").expect("valid thread");
+    let read_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread");
+    let primary_session = ThreadSessionState {
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::workspace_write(),
+        ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
+    };
+    app.primary_session_configured = Some(primary_session);
+
+    let thread = Thread {
+        id: read_thread_id.to_string(),
+        forked_from_id: None,
+        preview: "read thread".to_string(),
+        ephemeral: false,
+        model_provider: "read-provider".to_string(),
+        created_at: 1,
+        updated_at: 2,
+        status: codex_app_server_protocol::ThreadStatus::Idle,
+        path: None,
+        cwd: test_path_buf("/tmp/read").abs(),
+        cli_version: "0.0.0".to_string(),
+        source: codex_app_server_protocol::SessionSource::Unknown,
+        agent_nickname: None,
+        agent_role: None,
+        git_info: None,
+        name: Some("read thread".to_string()),
+        turns: Vec::new(),
+    };
+
+    let session = app
+        .session_state_for_thread_read(read_thread_id, &thread)
+        .await;
+
+    assert_eq!(session.thread_id, read_thread_id);
+    assert_eq!(session.cwd.as_path(), test_path_buf("/tmp/read").as_path());
+    let expected_permission_profile = app
+        .chat_widget
+        .config_ref()
+        .permissions
+        .permission_profile();
+    assert_eq!(
+        session.permission_profile, expected_permission_profile,
+        "thread/read does not return fresh server permissions; the fallback profile must use the \
+         active widget permissions rather than reusing the cached primary session profile"
+    );
 }
 
 #[test]
@@ -2867,7 +3004,7 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     let mut app = make_test_app().await;
     app.config.developer_instructions = Some("Existing developer policy.".to_string());
     let original_approval_policy = app.config.permissions.approval_policy.value();
-    let original_sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+    let original_sandbox_policy = app.config.legacy_sandbox_policy();
 
     let fork_config = app.side_fork_config();
 
@@ -2876,10 +3013,7 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
         fork_config.permissions.approval_policy.value(),
         original_approval_policy
     );
-    assert_eq!(
-        fork_config.permissions.sandbox_policy.get(),
-        &original_sandbox_policy
-    );
+    assert_eq!(fork_config.legacy_sandbox_policy(), original_sandbox_policy);
     let developer_instructions = fork_config
         .developer_instructions
         .as_deref()
@@ -3435,7 +3569,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3562,13 +3696,16 @@ async fn make_test_app() -> App {
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         runtime_approval_policy_override: None,
-        runtime_sandbox_policy_override: None,
+        runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
         overlay: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
+        transcript_reflow: TranscriptReflowState::default(),
+        initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
+        keymap: crate::keymap::RuntimeKeymap::defaults(),
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3619,13 +3756,16 @@ async fn make_test_app_with_channels() -> (
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
-            runtime_sandbox_policy_override: None,
+            runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            transcript_reflow: TranscriptReflowState::default(),
+            initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
+            keymap: crate::keymap::RuntimeKeymap::defaults(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3668,7 +3808,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::read_only(),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -3677,6 +3817,147 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     }
+}
+
+fn enable_terminal_resize_reflow(app: &mut App) {
+    app.config
+        .features
+        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ true)
+        .expect("feature should be configurable");
+}
+
+fn plain_line_cell(text: impl Into<String>) -> Arc<dyn HistoryCell> {
+    Arc::new(PlainHistoryCell::new(vec![Line::from(text.into())])) as Arc<dyn HistoryCell>
+}
+
+fn rendered_line_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+#[tokio::test]
+async fn capped_resize_reflow_renders_recent_suffix_only() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(5);
+    app.transcript_cells = (0..20)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert_eq!(rendered.lines.len(), 5);
+    assert_eq!(
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "cell 17".to_string(),
+            String::new(),
+            "cell 18".to_string(),
+            String::new(),
+            "cell 19".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = (0..20)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert_eq!(rendered.lines.len(), 39);
+    assert_eq!(rendered_line_text(&rendered.lines[0]), "cell 0");
+    assert_eq!(rendered_line_text(&rendered.lines[38]), "cell 19");
+}
+
+#[tokio::test]
+async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
+    app.transcript_cells = (0..3)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert_eq!(
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "cell 0".to_string(),
+            String::new(),
+            "cell 1".to_string(),
+            String::new(),
+            "cell 2".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
+
+    app.begin_initial_history_replay_buffer();
+    for index in 0..5 {
+        App::buffer_initial_history_replay_display_lines(
+            app.initial_history_replay_buffer
+                .as_mut()
+                .expect("initial replay buffer active"),
+            vec![Line::from(format!("line {index}"))],
+            /*max_rows*/ 3,
+        );
+    }
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert_eq!(
+        buffer
+            .retained_lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "line 2".to_string(),
+            "line 3".to_string(),
+            "line 4".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn height_shrink_schedules_resize_reflow() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+
+    assert!(!app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+
+    assert!(app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 24),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+    assert!(app.transcript_reflow.has_pending_reflow());
 }
 
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
@@ -4039,7 +4320,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4102,7 +4383,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4195,7 +4476,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4484,7 +4765,10 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
             /*is_first_line*/ false,
         )) as Arc<dyn HistoryCell>,
     ];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
@@ -4578,7 +4862,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::read_only(),
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4690,7 +4974,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4708,7 +4992,10 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        crate::keymap::RuntimeKeymap::defaults().pager,
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;

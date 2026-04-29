@@ -72,12 +72,12 @@ impl App {
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
+        if let Some(profile) = self.runtime_permission_profile_override.as_ref()
+            && let Err(err) = config.permissions.set_permission_profile(profile.clone())
         {
-            tracing::warn!(%err, "failed to carry forward sandbox policy override");
+            tracing::warn!(%err, "failed to carry forward permission profile override");
             self.chat_widget.add_error_message(format!(
-                "Failed to carry forward sandbox policy override: {err}"
+                "Failed to carry forward permission profile override: {err}"
             ));
         }
     }
@@ -104,14 +104,17 @@ impl App {
         true
     }
 
-    pub(super) fn try_set_sandbox_policy_on_config(
+    pub(super) fn try_set_permission_profile_on_config(
         &mut self,
         config: &mut Config,
-        policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
         user_message_prefix: &str,
         log_message: &str,
     ) -> bool {
-        if let Err(err) = config.permissions.sandbox_policy.set(policy) {
+        if let Err(err) = config
+            .permissions
+            .set_permission_profile(permission_profile)
+        {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
                 .add_error_message(format!("{user_message_prefix}: {err}"));
@@ -126,7 +129,7 @@ impl App {
             return;
         }
 
-        let guardian_approvals_preset = guardian_approvals_mode();
+        let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
         let scoped_segments = |key: &str| {
@@ -144,7 +147,7 @@ impl App {
         });
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
-        let mut sandbox_policy_override = None;
+        let mut permission_profile_override = None;
         let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
         // Auto-Review owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
@@ -202,16 +205,12 @@ impl App {
                     // Persist the reviewer setting so future sessions keep the
                     // experiment's matching `/approvals` mode until the user
                     // changes it explicitly.
-                    feature_config.approvals_reviewer =
-                        guardian_approvals_preset.approvals_reviewer;
+                    feature_config.approvals_reviewer = auto_review_preset.approvals_reviewer;
                     feature_edits.push(ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
-                        value: guardian_approvals_preset
-                            .approvals_reviewer
-                            .to_string()
-                            .into(),
+                        value: auto_review_preset.approvals_reviewer.to_string().into(),
                     });
-                    if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
+                    if previous_approvals_reviewer != auto_review_preset.approvals_reviewer {
                         permissions_history_label = Some("Auto-review");
                     }
                 } else if !effective_enabled {
@@ -234,17 +233,17 @@ impl App {
                 // makes guardian review observable in the current thread.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
-                    guardian_approvals_preset.approval_policy,
+                    auto_review_preset.approval_policy,
                     "Failed to enable Auto-review",
-                    "failed to set guardian approvals approval policy on staged config",
+                    "failed to set auto-review approval policy on staged config",
                 ) {
                     continue;
                 }
-                if !self.try_set_sandbox_policy_on_config(
+                if !self.try_set_permission_profile_on_config(
                     &mut feature_config,
-                    guardian_approvals_preset.sandbox_policy.clone(),
+                    auto_review_preset.permission_profile.clone(),
                     "Failed to enable Auto-review",
-                    "failed to set guardian approvals sandbox policy on staged config",
+                    "failed to set auto-review permission profile on staged config",
                 ) {
                     continue;
                 }
@@ -258,8 +257,8 @@ impl App {
                         value: "workspace-write".into(),
                     },
                 ]);
-                approval_policy_override = Some(guardian_approvals_preset.approval_policy);
-                sandbox_policy_override = Some(guardian_approvals_preset.sandbox_policy.clone());
+                approval_policy_override = Some(auto_review_preset.approval_policy);
+                permission_profile_override = Some(auto_review_preset.permission_profile.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -298,23 +297,29 @@ impl App {
             self.chat_widget
                 .set_approval_policy(self.config.permissions.approval_policy.value());
         }
-        if sandbox_policy_override.is_some()
+        if permission_profile_override.is_some()
             && let Err(err) = self
                 .chat_widget
-                .set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+                .set_permission_profile(self.config.permissions.permission_profile())
         {
             tracing::error!(
                 error = %err,
-                "failed to set guardian approvals sandbox policy on chat config"
+                "failed to set auto-review permission profile on chat config"
             );
             self.chat_widget
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
+        if permission_profile_override.is_some() {
+            self.runtime_permission_profile_override =
+                Some(self.config.permissions.permission_profile());
+        }
 
         if approval_policy_override.is_some()
             || approvals_reviewer_override.is_some()
-            || sandbox_policy_override.is_some()
+            || permission_profile_override.is_some()
         {
+            self.sync_active_thread_permission_settings_to_cached_session()
+                .await;
             // This uses `OverrideTurnContext` intentionally: toggling the
             // experiment should update the active thread's effective approval
             // settings immediately, just like a `/approvals` selection. Without
@@ -324,7 +329,7 @@ impl App {
                 /*cwd*/ None,
                 approval_policy_override,
                 approvals_reviewer_override,
-                sandbox_policy_override,
+                permission_profile_override,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -351,7 +356,7 @@ impl App {
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
-                        /*sandbox_policy*/ None,
+                        /*permission_profile*/ None,
                         #[cfg(target_os = "windows")]
                         Some(windows_sandbox_level),
                         /*model*/ None,
@@ -544,6 +549,7 @@ mod tests {
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
     use crate::test_support::PathBufExt;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SessionConfiguredEvent;
@@ -641,7 +647,7 @@ mod tests {
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: PermissionProfile::read_only(),
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -658,6 +664,28 @@ mod tests {
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_updates_resize_reflow_config() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[tui]
+terminal_resize_reflow_max_rows = 9000
+"#,
+        )?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app.config.terminal_resize_reflow.max_rows,
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
+        );
         Ok(())
     }
 

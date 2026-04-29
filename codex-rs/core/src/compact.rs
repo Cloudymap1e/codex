@@ -18,7 +18,6 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
-use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -31,6 +30,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::InferenceTraceContext;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
@@ -265,12 +265,6 @@ async fn run_compact_task_inner_impl(
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
-    let ghost_snapshots: Vec<ResponseItem> = history_items
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-    new_history.extend(ghost_snapshots);
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -294,7 +288,6 @@ async fn run_compact_task_inner_impl(
 }
 
 pub(crate) struct CompactionAnalyticsAttempt {
-    enabled: bool,
     thread_id: String,
     turn_id: String,
     trigger: CompactionTrigger,
@@ -315,10 +308,8 @@ impl CompactionAnalyticsAttempt {
         implementation: CompactionImplementation,
         phase: CompactionPhase,
     ) -> Self {
-        let enabled = sess.enabled(Feature::GeneralAnalytics);
         let active_context_tokens_before = sess.get_total_token_usage().await;
         Self {
-            enabled,
             thread_id: sess.conversation_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             trigger,
@@ -337,9 +328,6 @@ impl CompactionAnalyticsAttempt {
         status: CompactionStatus,
         error: Option<String>,
     ) {
-        if !self.enabled {
-            return;
-        }
         let active_context_tokens_after = sess.get_total_token_usage().await;
         sess.services
             .analytics_events_client
@@ -508,7 +496,6 @@ fn build_compacted_history_with_limit(
             content: vec![ContentItem::InputText {
                 text: message.clone(),
             }],
-            end_turn: None,
             phase: None,
         });
     }
@@ -523,7 +510,6 @@ fn build_compacted_history_with_limit(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
-        end_turn: None,
         phase: None,
     });
 
@@ -546,6 +532,9 @@ async fn drain_to_completed(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            // Rollout tracing currently models remote compaction only; local compaction streams
+            // are left untraced until the reducer has a first-class local compaction lifecycle.
+            &InferenceTraceContext::disabled(),
         )
         .await?;
     loop {

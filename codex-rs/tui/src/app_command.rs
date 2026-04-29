@@ -8,6 +8,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::RequestId as McpRequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -16,12 +17,13 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::permission_compat::legacy_compatible_permission_profile;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AppCommand(Op);
@@ -43,7 +45,7 @@ pub(crate) enum AppCommandView<'a> {
         cwd: &'a PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: &'a Option<ApprovalsReviewer>,
-        sandbox_policy: &'a SandboxPolicy,
+        permission_profile: &'a PermissionProfile,
         model: &'a str,
         effort: Option<ReasoningEffortConfig>,
         summary: &'a Option<ReasoningSummaryConfig>,
@@ -56,7 +58,7 @@ pub(crate) enum AppCommandView<'a> {
         cwd: &'a Option<PathBuf>,
         approval_policy: &'a Option<AskForApproval>,
         approvals_reviewer: &'a Option<ApprovalsReviewer>,
-        sandbox_policy: &'a Option<SandboxPolicy>,
+        permission_profile: &'a Option<PermissionProfile>,
         windows_sandbox_level: &'a Option<WindowsSandboxLevel>,
         model: &'a Option<String>,
         effort: &'a Option<Option<ReasoningEffortConfig>>,
@@ -139,7 +141,7 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: PermissionProfile,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -148,6 +150,13 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
+        let legacy_profile =
+            legacy_compatible_permission_profile(&permission_profile, cwd.as_path());
+        let sandbox_policy = legacy_profile
+            .to_legacy_sandbox_policy(cwd.as_path())
+            .unwrap_or_else(|err| {
+                unreachable!("legacy-compatible permissions must project to legacy policy: {err}")
+            });
         Self(Op::UserTurn {
             items,
             environments: None,
@@ -155,6 +164,7 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            permission_profile: Some(permission_profile),
             model,
             effort,
             summary,
@@ -170,7 +180,7 @@ impl AppCommand {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        sandbox_policy: Option<SandboxPolicy>,
+        permission_profile: Option<PermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
@@ -183,7 +193,8 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer,
-            sandbox_policy,
+            sandbox_policy: None,
+            permission_profile,
             windows_sandbox_level,
             model,
             effort,
@@ -289,7 +300,8 @@ impl AppCommand {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                sandbox_policy,
+                sandbox_policy: _,
+                permission_profile,
                 model,
                 effort,
                 summary,
@@ -303,7 +315,10 @@ impl AppCommand {
                 cwd,
                 approval_policy: *approval_policy,
                 approvals_reviewer,
-                sandbox_policy,
+                permission_profile: match permission_profile.as_ref() {
+                    Some(permission_profile) => permission_profile,
+                    None => unreachable!("AppCommand::user_turn always sets permission_profile"),
+                },
                 model,
                 effort: *effort,
                 summary,
@@ -316,7 +331,8 @@ impl AppCommand {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                sandbox_policy,
+                sandbox_policy: _,
+                permission_profile,
                 windows_sandbox_level,
                 model,
                 effort,
@@ -328,7 +344,7 @@ impl AppCommand {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                sandbox_policy,
+                permission_profile,
                 windows_sandbox_level,
                 model,
                 effort,
