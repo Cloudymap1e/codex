@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/unified_mentions_render.rs
+expression: "render_popup_text(\"@goog\", &rows, state, 86, SearchMode::Tools)"
+---
+› @goog
+
+  Google Calendar  Connect calendars and event management                       Plugin
+  Google Calendar  Find availability and plan event changes                     Skill
+
+
+
+
+
+
+
+  enter insert · esc close · ←/→ switch s…  All Results    Filesystem Only   [Plugins]

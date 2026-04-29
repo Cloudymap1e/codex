@@ -212,30 +212,15 @@ fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
         } else {
             base_style
         };
-        return vec![file_name.to_string().set_style(style)];
+        return styled_text_spans(file_name, style, None);
     }
 
-    let mut spans = Vec::with_capacity(row.display_name.len());
     let name_style = match row.mention_type {
         MentionType::Plugin => base_style.fg(PLUGIN_ACCENT_COLOR),
         MentionType::Skill => base_style.dim(),
         MentionType::File | MentionType::Directory => base_style,
     };
-    if let Some(indices) = row.match_indices.as_ref() {
-        let mut idx_iter = indices.iter().peekable();
-        for (char_idx, ch) in row.display_name.chars().enumerate() {
-            let mut style = name_style;
-            if idx_iter.peek().is_some_and(|next| **next == char_idx) {
-                idx_iter.next();
-                style = style.bold();
-            }
-            spans.push(ch.to_string().set_style(style));
-        }
-    } else {
-        spans.push(row.display_name.clone().set_style(name_style));
-    }
-
-    spans
+    styled_text_spans(&row.display_name, name_style, row.match_indices.as_deref())
 }
 
 fn secondary_line(
@@ -263,37 +248,26 @@ fn secondary_line(
 }
 
 fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
-    let mut spans = Vec::with_capacity(row.display_name.len());
     let file_name_start = file_name_start(row);
     let path_style = base_style.dim();
     if file_name_start == 0 {
-        spans.push(CURRENT_DIR_PREFIX.set_style(path_style));
-    } else if let Some(indices) = row.match_indices.as_ref() {
-        let mut idx_iter = indices.iter().peekable();
-        for (char_idx, ch) in row.display_name.chars().enumerate().take(file_name_start) {
-            let mut style = path_style;
-            if idx_iter.peek().is_some_and(|next| **next == char_idx) {
-                idx_iter.next();
-                style = style.bold();
-            }
-            spans.push(ch.to_string().set_style(style));
-        }
-    } else if file_name_start != usize::MAX {
+        return styled_text_spans(CURRENT_DIR_PREFIX, path_style, None);
+    }
+    if file_name_start != usize::MAX {
         let byte_start = row
             .display_name
             .char_indices()
             .nth(file_name_start)
             .map(|(idx, _)| idx)
             .unwrap_or(row.display_name.len());
-        spans.push(
-            row.display_name[..byte_start]
-                .to_string()
-                .set_style(path_style),
+        return styled_text_spans(
+            &row.display_name[..byte_start],
+            path_style,
+            row.match_indices.as_deref(),
         );
-    } else {
-        spans.push(row.display_name.clone().set_style(base_style));
     }
-    spans
+
+    styled_text_spans(&row.display_name, base_style, None)
 }
 
 fn primary_text_width(row: &SearchResult) -> usize {
@@ -329,6 +303,28 @@ fn file_name_start(row: &SearchResult) -> usize {
             .unwrap_or(0),
         Selection::File(_) | Selection::Tool { .. } => usize::MAX,
     }
+}
+
+fn styled_text_spans(
+    text: &str,
+    base_style: Style,
+    match_indices: Option<&[usize]>,
+) -> Vec<Span<'static>> {
+    let Some(match_indices) = match_indices else {
+        return vec![text.to_string().set_style(base_style)];
+    };
+
+    let mut spans = Vec::with_capacity(text.len());
+    let mut idx_iter = match_indices.iter().peekable();
+    for (char_idx, ch) in text.chars().enumerate() {
+        let mut style = base_style;
+        if idx_iter.peek().is_some_and(|next| **next == char_idx) {
+            idx_iter.next();
+            style = style.bold();
+        }
+        spans.push(ch.to_string().set_style(style));
+    }
+    spans
 }
 
 fn render_footer(area: Rect, buf: &mut Buffer, search_mode: SearchMode) {
@@ -401,4 +397,224 @@ fn search_mode_indicator_line(active_search_mode: SearchMode) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn render_popup_text(
+        query: &str,
+        rows: &[SearchResult],
+        state: ScrollState,
+        width: u16,
+        search_mode: SearchMode,
+    ) -> String {
+        let area = Rect::new(0, 0, width, (MAX_POPUP_ROWS as u16) + 2);
+        let mut buf = Buffer::empty(area);
+        render_popup(area, &mut buf, rows, &state, "no matches", search_mode);
+
+        let popup = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        format!("› {query}\n\n{popup}")
+    }
+
+    fn tool_result(
+        display_name: &str,
+        description: Option<&str>,
+        mention_type: MentionType,
+    ) -> SearchResult {
+        SearchResult {
+            display_name: display_name.to_string(),
+            description: description.map(str::to_string),
+            mention_type,
+            selection: Selection::Tool {
+                insert_text: format!("${display_name}"),
+                path: None,
+            },
+            match_indices: None,
+            score: 0,
+        }
+    }
+
+    fn file_result(path: &str, mention_type: MentionType) -> SearchResult {
+        SearchResult {
+            display_name: path.to_string(),
+            description: None,
+            mention_type,
+            selection: Selection::File(PathBuf::from(path)),
+            match_indices: None,
+            score: 0,
+        }
+    }
+
+    #[test]
+    fn unified_mentions_mixed_results_snapshot() {
+        let rows = vec![
+            tool_result(
+                "Google Calendar",
+                Some("Connect calendars and event management"),
+                MentionType::Plugin,
+            ),
+            tool_result(
+                "Google Calendar",
+                Some("Find availability and plan event changes"),
+                MentionType::Skill,
+            ),
+            file_result("src/google/calendar.rs", MentionType::File),
+            file_result("src/google", MentionType::Directory),
+        ];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_mixed_results",
+            render_popup_text(
+                "@goog",
+                &rows,
+                state,
+                /*width*/ 86,
+                SearchMode::Results
+            )
+        );
+    }
+
+    #[test]
+    fn unified_mentions_narrow_width_truncation_snapshot() {
+        let rows = vec![
+            tool_result(
+                "Google Calendar",
+                Some("Connect calendars and event management"),
+                MentionType::Plugin,
+            ),
+            tool_result(
+                "Google Calendar",
+                Some("Find availability and plan event changes"),
+                MentionType::Skill,
+            ),
+            file_result("src/google/calendar.rs", MentionType::File),
+            file_result("src/google", MentionType::Directory),
+        ];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_narrow_width_truncation",
+            render_popup_text(
+                "@goog",
+                &rows,
+                state,
+                /*width*/ 52,
+                SearchMode::Results
+            )
+        );
+    }
+
+    #[test]
+    fn unified_mentions_plugins_mode_footer_snapshot() {
+        let rows = vec![tool_result(
+            "Calendar Skill",
+            Some("Find availability and plan event changes"),
+            MentionType::Skill,
+        )];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_plugins_mode_footer",
+            render_popup_text(
+                "@calendar",
+                &rows,
+                state,
+                /*width*/ 86,
+                SearchMode::Tools
+            )
+        );
+    }
+
+    #[test]
+    fn unified_mentions_tools_mode_duplicate_display_names_snapshot() {
+        let rows = vec![
+            tool_result(
+                "Google Calendar",
+                Some("Connect calendars and event management"),
+                MentionType::Plugin,
+            ),
+            tool_result(
+                "Google Calendar",
+                Some("Find availability and plan event changes"),
+                MentionType::Skill,
+            ),
+        ];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_tools_mode_duplicate_display_names",
+            render_popup_text("@goog", &rows, state, /*width*/ 86, SearchMode::Tools)
+        );
+    }
+
+    #[test]
+    fn unified_mentions_scrolled_results_snapshot() {
+        let rows = (0..(MAX_POPUP_ROWS + 2))
+            .map(|idx| file_result(&format!("src/results/file_{idx:02}.rs"), MentionType::File))
+            .collect::<Vec<_>>();
+        let state = ScrollState {
+            selected_idx: Some(MAX_POPUP_ROWS + 1),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_scrolled",
+            render_popup_text(
+                "@file",
+                &rows,
+                state,
+                /*width*/ 72,
+                SearchMode::Results
+            )
+        );
+    }
+
+    #[test]
+    fn unified_mentions_filesystem_only_mode_snapshot() {
+        let rows = vec![
+            file_result("src/google/calendar.rs", MentionType::File),
+            file_result("src/google", MentionType::Directory),
+        ];
+        let state = ScrollState {
+            selected_idx: Some(0),
+            scroll_top: 0,
+        };
+
+        insta::assert_snapshot!(
+            "unified_mentions_filesystem_only_mode",
+            render_popup_text(
+                "@goog",
+                &rows,
+                state,
+                /*width*/ 86,
+                SearchMode::FilesystemOnly
+            )
+        );
+    }
 }

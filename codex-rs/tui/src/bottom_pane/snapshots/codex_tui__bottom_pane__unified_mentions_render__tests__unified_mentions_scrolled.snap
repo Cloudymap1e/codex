@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/unified_mentions_render.rs
+expression: "render_popup_text(\"@file\", &rows, state, 72, SearchMode::Results)"
+---
+› @file
+
+  file_02.rs  src/results/                                        File
+  file_03.rs  src/results/                                        File
+  file_04.rs  src/results/                                        File
+  file_05.rs  src/results/                                        File
+  file_06.rs  src/results/                                        File
+  file_07.rs  src/results/                                        File
+  file_08.rs  src/results/                                        File
+  file_09.rs  src/results/                                        File
+
+  enter insert · esc close … [All Results]   Filesystem Only    Plugins

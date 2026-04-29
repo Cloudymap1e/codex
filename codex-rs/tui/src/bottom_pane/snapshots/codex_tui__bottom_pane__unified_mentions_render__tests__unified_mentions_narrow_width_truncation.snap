@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/unified_mentions_render.rs
+expression: "render_popup_text(\"@goog\", &rows, state, 52, SearchMode::Results)"
+---
+› @goog
+
+  Google Calendar  Connect calendars and ev…  Plugin
+  Google Calendar  Find availability and pl…  Skill
+  calendar.rs      src/google/                File
+  google           src/                       Dir
+
+
+
+
+
+  enter… [All Results]   Filesystem Only    Plugins

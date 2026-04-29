@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/unified_mentions_render.rs
+expression: "render_popup_text(\"@calendar\", &rows, state, 86, SearchMode::Tools)"
+---
+› @calendar
+
+  Calendar Skill  Find availability and plan event changes                      Skill
+
+
+
+
+
+
+
+
+  enter insert · esc close · ←/→ switch s…  All Results    Filesystem Only   [Plugins]

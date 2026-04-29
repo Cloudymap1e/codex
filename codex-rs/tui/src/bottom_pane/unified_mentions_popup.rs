@@ -85,6 +85,7 @@ impl UnifiedMentionsPopup {
     }
 
     pub(crate) fn calculate_required_height(&self, _width: u16) -> u16 {
+        // Keep a fixed popup height to avoid layout jitter while search results update.
         (MAX_POPUP_ROWS as u16).saturating_add(POPUP_FOOTER_HEIGHT)
     }
 
@@ -119,21 +120,17 @@ impl WidgetRef for UnifiedMentionsPopup {
 }
 
 struct FileSearchState {
-    display_query: String,
     pending_query: String,
     waiting: bool,
     matches: Vec<FileMatch>,
-    state: ScrollState,
 }
 
 impl FileSearchState {
     fn new() -> Self {
         Self {
-            display_query: String::new(),
             pending_query: String::new(),
             waiting: true,
             matches: Vec::new(),
-            state: ScrollState::new(),
         }
     }
 
@@ -148,11 +145,9 @@ impl FileSearchState {
     }
 
     fn set_empty_prompt(&mut self) {
-        self.display_query.clear();
         self.pending_query.clear();
         self.waiting = false;
         self.matches.clear();
-        self.state.reset();
     }
 
     fn set_matches(&mut self, query: &str, matches: Vec<FileMatch>) {
@@ -160,12 +155,8 @@ impl FileSearchState {
             return;
         }
 
-        self.display_query = query.to_string();
         self.matches = matches.into_iter().take(MAX_POPUP_ROWS).collect();
         self.waiting = false;
-        let len = self.matches.len();
-        self.state.clamp_selection(len);
-        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
     }
 
     fn matches(&self) -> &[FileMatch] {
@@ -218,5 +209,48 @@ mod tests {
             (0..MAX_POPUP_ROWS).map(file_match).collect::<Vec<_>>()
         );
         assert!(state.has_matches());
+    }
+
+    #[test]
+    fn unified_mentions_query_change_keeps_previous_file_selection_while_waiting_for_new_results() {
+        let mut popup = UnifiedMentionsPopup::new(Vec::new());
+        popup.set_query("ma");
+        popup.set_file_matches("ma", vec![file_match(1)]);
+
+        match popup.selected() {
+            Some(Selection::File(path)) => {
+                assert_eq!(path, PathBuf::from("src/file_01.rs"));
+            }
+            other => panic!("expected selected file match, got {other:?}"),
+        }
+
+        popup.set_query("mak");
+
+        assert_eq!(
+            popup.file_search.empty_message(),
+            FILE_SEARCH_LOADING_MESSAGE
+        );
+        assert_eq!(popup.rows().len(), 1);
+        match popup.selected() {
+            Some(Selection::File(path)) => {
+                assert_eq!(path, PathBuf::from("src/file_01.rs"));
+            }
+            other => panic!("expected stale selected file match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unified_mentions_stale_file_search_results_are_ignored_after_the_query_changes() {
+        let mut popup = UnifiedMentionsPopup::new(Vec::new());
+        popup.set_query("ma");
+        popup.set_query("main");
+        popup.set_file_matches("ma", vec![file_match(1)]);
+
+        assert!(popup.rows().is_empty());
+        assert!(popup.selected().is_none());
+        assert_eq!(
+            popup.file_search.empty_message(),
+            FILE_SEARCH_LOADING_MESSAGE
+        );
     }
 }

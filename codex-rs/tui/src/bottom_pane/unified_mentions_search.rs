@@ -91,6 +91,7 @@ impl SearchMode {
         match self {
             Self::Results => SEARCH_MODE_LABEL_RESULTS,
             Self::FilesystemOnly => SEARCH_MODE_LABEL_FILESYSTEM_ONLY,
+            // Keep the footer copy as "Plugins", even though this mode does also include skills.
             Self::Tools => SEARCH_MODE_LABEL_PLUGINS,
         }
     }
@@ -128,6 +129,7 @@ impl Candidate {
     }
 }
 
+// Unified `@` intentionally excludes app connectors for Codex App parity; `$` mentions still surface apps/connectors.
 pub(crate) fn build_search_catalog(
     skills: Option<&[SkillMetadata]>,
     plugins: Option<&[PluginCapabilitySummary]>,
@@ -328,5 +330,129 @@ fn file_match_to_row(file_match: &FileMatch) -> SearchResult {
             .as_ref()
             .map(|indices| indices.iter().map(|idx| *idx as usize).collect()),
         score: file_match.score as i32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn tool_candidate(display_name: &str, mention_type: MentionType) -> Candidate {
+        Candidate {
+            display_name: display_name.to_string(),
+            description: None,
+            search_terms: vec![display_name.to_string()],
+            mention_type,
+            selection: Selection::Tool {
+                insert_text: format!("${display_name}"),
+                path: None,
+            },
+        }
+    }
+
+    fn file_match(path: &str, match_type: MatchType, score: u32) -> FileMatch {
+        FileMatch {
+            score,
+            path: PathBuf::from(path),
+            match_type,
+            root: PathBuf::from("/tmp/repo"),
+            indices: None,
+        }
+    }
+
+    #[test]
+    fn unified_mentions_all_results_order_tools_before_files_and_files_by_descending_score() {
+        let candidates = vec![
+            tool_candidate("Bravo Plugin", MentionType::Plugin),
+            tool_candidate("Alpha Skill", MentionType::Skill),
+        ];
+        let file_matches = vec![
+            file_match("src/alpha.rs", MatchType::File, 1),
+            file_match("src/bin", MatchType::Directory, 7),
+            file_match("src/zeta.rs", MatchType::File, 9),
+        ];
+
+        let rows = filtered_candidates(
+            &candidates,
+            &file_matches,
+            "",
+            SearchMode::Results,
+            /*show_file_matches*/ true,
+        );
+
+        let ordered_rows: Vec<(MentionType, String)> = rows
+            .into_iter()
+            .map(|row| (row.mention_type, row.display_name))
+            .collect();
+        assert_eq!(
+            ordered_rows,
+            vec![
+                (MentionType::Plugin, "Bravo Plugin".to_string()),
+                (MentionType::Skill, "Alpha Skill".to_string()),
+                (MentionType::File, "src/zeta.rs".to_string()),
+                (MentionType::Directory, "src/bin".to_string()),
+                (MentionType::File, "src/alpha.rs".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unified_mentions_search_modes_filter_results_to_their_expected_types() {
+        let candidates = vec![
+            tool_candidate("Bravo Plugin", MentionType::Plugin),
+            tool_candidate("Alpha Skill", MentionType::Skill),
+        ];
+        let file_matches = vec![
+            file_match("src/main.rs", MatchType::File, 5),
+            file_match("src/bin", MatchType::Directory, 4),
+        ];
+
+        let all_results: Vec<MentionType> = filtered_candidates(
+            &candidates,
+            &file_matches,
+            "",
+            SearchMode::Results,
+            /*show_file_matches*/ true,
+        )
+        .into_iter()
+        .map(|row| row.mention_type)
+        .collect();
+        assert_eq!(
+            all_results,
+            vec![
+                MentionType::Plugin,
+                MentionType::Skill,
+                MentionType::File,
+                MentionType::Directory,
+            ]
+        );
+
+        let filesystem_only: Vec<MentionType> = filtered_candidates(
+            &candidates,
+            &file_matches,
+            "",
+            SearchMode::FilesystemOnly,
+            /*show_file_matches*/ true,
+        )
+        .into_iter()
+        .map(|row| row.mention_type)
+        .collect();
+        assert_eq!(
+            filesystem_only,
+            vec![MentionType::File, MentionType::Directory]
+        );
+
+        let tools_only: Vec<MentionType> = filtered_candidates(
+            &candidates,
+            &file_matches,
+            "",
+            SearchMode::Tools,
+            /*show_file_matches*/ true,
+        )
+        .into_iter()
+        .map(|row| row.mention_type)
+        .collect();
+        assert_eq!(tools_only, vec![MentionType::Plugin, MentionType::Skill]);
     }
 }
