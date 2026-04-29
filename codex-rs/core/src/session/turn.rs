@@ -167,10 +167,11 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
+    let auth = sess.services.auth_manager.auth().await;
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config_with_auth(&turn_context.config, auth.as_ref())
         .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
@@ -1121,10 +1122,11 @@ pub(crate) async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
+    let auth = sess.services.auth_manager.auth().await;
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config)
+        .plugins_for_config_with_auth(&turn_context.config, auth.as_ref())
         .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
@@ -1152,7 +1154,6 @@ pub(crate) async fn built_tools(
     } else {
         None
     };
-    let auth = sess.services.auth_manager.auth().await;
     let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(

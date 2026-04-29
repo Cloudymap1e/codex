@@ -693,10 +693,11 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        let auth = self.services.auth_manager.auth().await;
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config)
+            .plugins_for_config_with_auth(&per_turn_config, auth.as_ref())
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);

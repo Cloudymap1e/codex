@@ -211,12 +211,12 @@ impl Session {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let mcp_config = config
-            .to_mcp_config(self.services.plugins_manager.as_ref())
+            .to_mcp_config_with_auth(self.services.plugins_manager.as_ref(), auth.as_ref())
             .await;
         let tool_plugin_provenance = self
             .services
             .mcp_manager
-            .tool_plugin_provenance(config.as_ref())
+            .tool_plugin_provenance_with_auth(config.as_ref(), auth.as_ref())
             .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses =

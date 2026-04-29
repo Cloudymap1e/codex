@@ -766,7 +766,8 @@ impl Session {
                 };
 
             let hooks =
-                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
+                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell, auth)
+                    .await;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -914,7 +915,9 @@ impl Session {
             required_mcp_servers.sort();
             let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
             let required_mcp_server_count = required_mcp_servers.len();
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
+            let tool_plugin_provenance = mcp_manager
+                .tool_plugin_provenance_with_auth(config.as_ref(), auth)
+                .await;
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();

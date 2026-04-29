@@ -748,24 +748,39 @@ impl CodexMessageProcessor {
         config: Config,
     ) -> Arc<dyn Fn() + Send + Sync> {
         let thread_manager = Arc::clone(&self.thread_manager);
+        let auth_manager = Arc::clone(&self.auth_manager);
         Arc::new(move || {
-            Self::spawn_effective_plugins_changed_task(Arc::clone(&thread_manager), config.clone());
+            Self::spawn_effective_plugins_changed_task(
+                Arc::clone(&thread_manager),
+                Arc::clone(&auth_manager),
+                config.clone(),
+            );
         })
     }
 
     fn on_effective_plugins_changed(&self, config: Config) {
-        Self::spawn_effective_plugins_changed_task(Arc::clone(&self.thread_manager), config);
+        Self::spawn_effective_plugins_changed_task(
+            Arc::clone(&self.thread_manager),
+            Arc::clone(&self.auth_manager),
+            config,
+        );
     }
 
-    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+    fn spawn_effective_plugins_changed_task(
+        thread_manager: Arc<ThreadManager>,
+        auth_manager: Arc<AuthManager>,
+        config: Config,
+    ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_manager().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
+            let auth = auth_manager.auth().await;
             if let Err(err) =
-                Self::queue_mcp_server_refresh_for_config(&thread_manager, &config).await
+                Self::queue_mcp_server_refresh_for_config(&thread_manager, &config, auth.as_ref())
+                    .await
             {
                 warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
             }
@@ -5426,7 +5441,9 @@ impl CodexMessageProcessor {
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
         let result = async {
             let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-            Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config).await?;
+            let auth = self.auth_manager.auth().await;
+            Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config, auth.as_ref())
+                .await?;
             Ok::<_, JSONRPCErrorError>(McpServerRefreshResponse {})
         }
         .await;
@@ -5436,10 +5453,11 @@ impl CodexMessageProcessor {
     async fn queue_mcp_server_refresh_for_config(
         thread_manager: &Arc<ThreadManager>,
         config: &Config,
+        auth: Option<&CodexAuth>,
     ) -> Result<(), JSONRPCErrorError> {
         let configured_servers = thread_manager
             .mcp_manager()
-            .configured_servers(config)
+            .configured_servers_with_auth(config, auth)
             .await;
         let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
@@ -5497,10 +5515,11 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
+        let auth = self.auth_manager.auth().await;
         let configured_servers = self
             .thread_manager
             .mcp_manager()
-            .configured_servers(&config)
+            .configured_servers_with_auth(&config, auth.as_ref())
             .await;
         let Some(server) = configured_servers.get(&name) else {
             return Err(invalid_request(format!(
@@ -5582,10 +5601,13 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
-            .await;
         let auth = self.auth_manager.auth().await;
+        let mcp_config = config
+            .to_mcp_config_with_auth(
+                self.thread_manager.plugins_manager().as_ref(),
+                auth.as_ref(),
+            )
+            .await;
         let environment_manager = self.thread_manager.environment_manager();
         let runtime_environment = match environment_manager.default_environment() {
             Some(environment) => {
@@ -5757,10 +5779,13 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let mcp_config = config
-            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
-            .await;
         let auth = self.auth_manager.auth().await;
+        let mcp_config = config
+            .to_mcp_config_with_auth(
+                self.thread_manager.plugins_manager().as_ref(),
+                auth.as_ref(),
+            )
+            .await;
         let runtime_environment = {
             let environment_manager = self.thread_manager.environment_manager();
             let environment = environment_manager
@@ -6304,7 +6329,11 @@ impl CodexMessageProcessor {
                 .map_or(&[][..], std::vec::Vec::as_slice);
             let effective_skill_roots = if workspace_codex_plugins_enabled {
                 plugins_manager
-                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+                    .effective_skill_roots_for_layer_stack_with_auth(
+                        &config_layer_stack,
+                        &config,
+                        auth.as_ref(),
+                    )
                     .await
             } else {
                 Vec::new()

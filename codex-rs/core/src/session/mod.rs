@@ -475,7 +475,10 @@ impl Codex {
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
-        let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
+        let auth = auth_manager.auth().await;
+        let plugin_outcome = plugins_manager
+            .plugins_for_config_with_auth(&config, auth.as_ref())
+            .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
@@ -1423,10 +1426,12 @@ impl Session {
         };
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
+        let auth = self.services.auth_manager.auth().await;
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
+            auth.as_ref(),
         )
         .await;
 
@@ -2663,10 +2668,11 @@ impl Session {
                 developer_sections.push(skills_instructions.render());
             }
         }
+        let auth = self.services.auth_manager.auth().await;
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config)
+            .plugins_for_config_with_auth(&turn_context.config, auth.as_ref())
             .await;
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
@@ -3356,13 +3362,16 @@ async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
+    auth: Option<&CodexAuth>,
 ) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
     let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
     let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-        let plugin_outcome = plugins_manager.plugins_for_config(config).await;
+        let plugin_outcome = plugins_manager
+            .plugins_for_config_with_auth(config, auth)
+            .await;
         (
             plugin_outcome.effective_plugin_hook_sources(),
             plugin_outcome.effective_plugin_hook_warnings(),

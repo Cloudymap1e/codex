@@ -21,7 +21,18 @@ impl McpManager {
     }
 
     pub async fn configured_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
-        let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
+        self.configured_servers_with_auth(config, /*auth*/ None)
+            .await
+    }
+
+    pub async fn configured_servers_with_auth(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> HashMap<String, McpServerConfig> {
+        let mcp_config = config
+            .to_mcp_config_with_auth(self.plugins_manager.as_ref(), auth)
+            .await;
         configured_mcp_servers(&mcp_config)
     }
 
@@ -30,12 +41,25 @@ impl McpManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> HashMap<String, McpServerConfig> {
-        let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
+        let mcp_config = config
+            .to_mcp_config_with_auth(self.plugins_manager.as_ref(), auth)
+            .await;
         effective_mcp_servers(&mcp_config, auth)
     }
 
     pub async fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
-        let mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
+        self.tool_plugin_provenance_with_auth(config, /*auth*/ None)
+            .await
+    }
+
+    pub async fn tool_plugin_provenance_with_auth(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> ToolPluginProvenance {
+        let mcp_config = config
+            .to_mcp_config_with_auth(self.plugins_manager.as_ref(), auth)
+            .await;
         collect_tool_plugin_provenance(&mcp_config)
     }
 }

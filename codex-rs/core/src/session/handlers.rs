@@ -575,6 +575,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
         .environment_manager
         .default_environment()
         .map(|environment| environment.get_filesystem());
+    let auth = sess.services.auth_manager.auth().await;
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;
     let mut skills = Vec::new();
@@ -621,7 +622,11 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             }
         };
         let effective_skill_roots = plugins_manager
-            .effective_skill_roots_for_layer_stack(&config_layer_stack, &config)
+            .effective_skill_roots_for_layer_stack_with_auth(
+                &config_layer_stack,
+                &config,
+                auth.as_ref(),
+            )
             .await;
         let skills_input = crate::SkillsLoadInput::new(
             cwd_abs.clone(),

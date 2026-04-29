@@ -79,7 +79,7 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     let connectors = codex_connectors::cached_all_connectors(&cache_key)?;
     let connectors = merge_plugin_connectors(
         connectors,
-        plugin_apps_for_config(config)
+        plugin_apps_for_config(config, Some(&auth))
             .await
             .into_iter()
             .map(|connector_id| connector_id.0),
@@ -115,7 +115,7 @@ pub async fn list_all_connectors_with_options(
     .await?;
     let connectors = merge_plugin_connectors(
         connectors,
-        plugin_apps_for_config(config)
+        plugin_apps_for_config(config, Some(&auth))
             .await
             .into_iter()
             .map(|connector_id| connector_id.0),
@@ -135,9 +135,12 @@ fn all_connectors_cache_key(config: &Config, auth: &CodexAuth) -> AllConnectorsC
     )
 }
 
-async fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::AppConnectorId> {
+async fn plugin_apps_for_config(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> Vec<codex_core::plugins::AppConnectorId> {
     PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(config)
+        .plugins_for_config_with_auth(config, auth)
         .await
         .effective_apps()
 }

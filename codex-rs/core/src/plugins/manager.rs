@@ -95,8 +95,31 @@ struct CachedFeaturedPluginIds {
     featured_plugin_ids: Vec<String>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct RemoteInstalledPluginsCacheKey {
+    chatgpt_base_url: String,
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    is_workspace_account: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct CachedRemoteInstalledPlugins {
+    key: RemoteInstalledPluginsCacheKey,
+    plugins: Vec<RemoteInstalledPlugin>,
+}
+
+#[derive(Clone)]
+struct CachedPluginLoadOutcome {
+    config_version: String,
+    plugin_hooks_enabled: bool,
+    remote_installed_plugins_cache_key: Option<RemoteInstalledPluginsCacheKey>,
+    outcome: PluginLoadOutcome,
+}
+
 struct RemoteInstalledPluginsCacheRefreshRequest {
     service_config: RemotePluginServiceConfig,
+    cache_key: Option<RemoteInstalledPluginsCacheKey>,
     auth: Option<CodexAuth>,
     notify: RemoteInstalledPluginsCacheRefreshNotify,
     // App-server attaches side effects such as skills metadata invalidation and MCP refreshes when
@@ -159,6 +182,25 @@ fn featured_plugin_ids_cache_key(
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
     }
+}
+
+fn remote_installed_plugins_cache_key(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> Option<RemoteInstalledPluginsCacheKey> {
+    if !config.features.enabled(Feature::RemotePlugin) {
+        return None;
+    }
+    let auth = auth?;
+    if !auth.uses_codex_backend() {
+        return None;
+    }
+    Some(RemoteInstalledPluginsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id: auth.get_account_id(),
+        chatgpt_user_id: auth.get_chatgpt_user_id(),
+        is_workspace_account: auth.is_workspace_account(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,20 +403,11 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
-    // TODO(remote plugins): reset this cache when ChatGPT auth/account state changes so stale
-    // remote installed state cannot remain effective for a different account.
-    remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
+    remote_installed_plugins_cache: RwLock<Option<CachedRemoteInstalledPlugins>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
-}
-
-#[derive(Clone)]
-struct CachedPluginLoadOutcome {
-    config_version: String,
-    plugin_hooks_enabled: bool,
-    outcome: PluginLoadOutcome,
 }
 
 impl PluginsManager {
@@ -431,13 +464,25 @@ impl PluginsManager {
     }
 
     pub async fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        self.plugins_for_config_with_force_reload(config, /*force_reload*/ false)
+        self.plugins_for_config_with_auth(config, /*auth*/ None)
             .await
     }
 
-    pub(crate) async fn plugins_for_config_with_force_reload(
+    pub async fn plugins_for_config_with_auth(
         &self,
         config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> PluginLoadOutcome {
+        self.plugins_for_config_with_auth_and_force_reload(
+            config, auth, /*force_reload*/ false,
+        )
+        .await
+    }
+
+    pub(crate) async fn plugins_for_config_with_auth_and_force_reload(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
         force_reload: bool,
     ) -> PluginLoadOutcome {
         if !config.features.enabled(Feature::Plugins) {
@@ -446,16 +491,20 @@ impl PluginsManager {
 
         let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
         let config_version = version_for_toml(&config.config_layer_stack.effective_config());
+        let remote_cache_key = remote_installed_plugins_cache_key(config, auth);
         if !force_reload
-            && let Some(outcome) =
-                self.cached_enabled_outcome(&config_version, plugin_hooks_enabled)
+            && let Some(outcome) = self.cached_enabled_outcome(
+                &config_version,
+                plugin_hooks_enabled,
+                remote_cache_key.as_ref(),
+            )
         {
             return outcome;
         }
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(config, remote_cache_key.as_ref()),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -469,6 +518,7 @@ impl PluginsManager {
         *cache = Some(CachedPluginLoadOutcome {
             config_version,
             plugin_hooks_enabled,
+            remote_installed_plugins_cache_key: remote_cache_key,
             outcome: outcome.clone(),
         });
         outcome
@@ -498,12 +548,30 @@ impl PluginsManager {
         config: &Config,
         plugin_hooks_feature_enabled: bool,
     ) -> PluginLoadOutcome {
+        self.plugins_for_layer_stack_with_auth(
+            config_layer_stack,
+            config,
+            plugin_hooks_feature_enabled,
+            /*auth*/ None,
+        )
+        .await
+    }
+
+    /// Load plugins for a config layer stack with auth without touching the plugins cache.
+    pub async fn plugins_for_layer_stack_with_auth(
+        &self,
+        config_layer_stack: &ConfigLayerStack,
+        config: &Config,
+        plugin_hooks_feature_enabled: bool,
+        auth: Option<&CodexAuth>,
+    ) -> PluginLoadOutcome {
         if !config.features.enabled(Feature::Plugins) {
             return PluginLoadOutcome::default();
         }
+        let remote_cache_key = remote_installed_plugins_cache_key(config, auth);
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(config, remote_cache_key.as_ref()),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -526,55 +594,83 @@ impl PluginsManager {
         .effective_skill_roots()
     }
 
+    pub async fn effective_skill_roots_for_layer_stack_with_auth(
+        &self,
+        config_layer_stack: &ConfigLayerStack,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> Vec<AbsolutePathBuf> {
+        self.plugins_for_layer_stack_with_auth(
+            config_layer_stack,
+            config,
+            config.features.enabled(Feature::PluginHooks),
+            auth,
+        )
+        .await
+        .effective_skill_roots()
+    }
+
     fn cached_enabled_outcome(
         &self,
         config_version: &str,
         plugin_hooks_enabled: bool,
+        remote_cache_key: Option<&RemoteInstalledPluginsCacheKey>,
     ) -> Option<PluginLoadOutcome> {
-        match self.cached_enabled_outcome.read() {
-            Ok(cache) => cache
-                .as_ref()
-                .filter(|cached| {
-                    cached.config_version == config_version
-                        && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                })
-                .map(|cached| cached.outcome.clone()),
-            Err(err) => err
-                .into_inner()
-                .as_ref()
-                .filter(|cached| {
-                    cached.config_version == config_version
-                        && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                })
-                .map(|cached| cached.outcome.clone()),
+        let cache = match self.cached_enabled_outcome.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let cache = cache.as_ref()?;
+        if cache.config_version == config_version
+            && cache.plugin_hooks_enabled == plugin_hooks_enabled
+            && cache.remote_installed_plugins_cache_key.as_ref() == remote_cache_key
+        {
+            Some(cache.outcome.clone())
+        } else {
+            None
         }
     }
 
-    fn remote_installed_plugin_configs(&self, config: &Config) -> HashMap<String, PluginConfig> {
+    fn remote_installed_plugin_configs(
+        &self,
+        config: &Config,
+        remote_cache_key: Option<&RemoteInstalledPluginsCacheKey>,
+    ) -> HashMap<String, PluginConfig> {
         if !config.features.enabled(Feature::RemotePlugin) {
             return HashMap::new();
         }
+        let Some(remote_cache_key) = remote_cache_key else {
+            return HashMap::new();
+        };
 
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        let Some(plugins) = cache.as_ref() else {
+        let Some(cache) = cache.as_ref() else {
             return HashMap::new();
         };
+        if cache.key != *remote_cache_key {
+            return HashMap::new();
+        }
 
-        remote_installed_plugins_to_config(plugins, &self.store)
+        remote_installed_plugins_to_config(&cache.plugins, &self.store)
     }
 
-    fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
+    fn write_remote_installed_plugins_cache(
+        &self,
+        key: RemoteInstalledPluginsCacheKey,
+        plugins: Vec<RemoteInstalledPlugin>,
+    ) -> bool {
         let mut cache = match self.remote_installed_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        if cache.as_ref().is_some_and(|cache| cache.eq(&plugins)) {
+        let new_cache = CachedRemoteInstalledPlugins { key, plugins };
+        if cache.as_ref().is_some_and(|cache| cache == &new_cache) {
             return false;
         }
-        *cache = Some(plugins);
+        *cache = Some(new_cache);
         drop(cache);
         self.clear_enabled_outcome_cache();
         true
@@ -638,6 +734,7 @@ impl PluginsManager {
         self.schedule_remote_installed_plugins_cache_refresh(
             RemoteInstalledPluginsCacheRefreshRequest {
                 service_config: remote_plugin_service_config(config),
+                cache_key: remote_installed_plugins_cache_key(config, auth.as_ref()),
                 auth,
                 notify,
                 on_effective_plugins_changed,
@@ -1657,7 +1754,12 @@ impl PluginsManager {
                 Ok(installed_plugins) => {
                     // TODO(remote plugins): reconcile missing or stale local bundles before
                     // publishing remote installed state as effective local plugin config.
-                    let changed = self.write_remote_installed_plugins_cache(installed_plugins);
+                    let changed = match request.cache_key {
+                        Some(cache_key) => {
+                            self.write_remote_installed_plugins_cache(cache_key, installed_plugins)
+                        }
+                        None => self.clear_remote_installed_plugins_cache(),
+                    };
                     let should_notify = changed
                         || matches!(
                             request.notify,

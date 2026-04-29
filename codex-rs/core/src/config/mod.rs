@@ -1000,7 +1000,18 @@ impl Config {
         &self,
         plugins_manager: &crate::plugins::PluginsManager,
     ) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
+        self.to_mcp_config_with_auth(plugins_manager, /*auth*/ None)
+            .await
+    }
+
+    pub async fn to_mcp_config_with_auth(
+        &self,
+        plugins_manager: &crate::plugins::PluginsManager,
+        auth: Option<&codex_login::CodexAuth>,
+    ) -> McpConfig {
+        let loaded_plugins = plugins_manager
+            .plugins_for_config_with_auth(self, auth)
+            .await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for plugin in loaded_plugins
             .plugins()

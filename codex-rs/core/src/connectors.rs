@@ -121,7 +121,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    let connector_ids = tool_suggest_connector_ids(config).await;
+    let connector_ids = tool_suggest_connector_ids(config, auth).await;
     let discoverable_connectors =
         codex_connectors::filter::filter_tool_suggest_discoverable_connectors(
             directory_connectors,
@@ -230,7 +230,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
+    let tool_plugin_provenance = mcp_manager
+        .tool_plugin_provenance_with_auth(config, auth.as_ref())
+        .await;
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
@@ -244,7 +246,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
 
-    let mcp_config = config.to_mcp_config(plugins_manager.as_ref()).await;
+    let mcp_config = config
+        .to_mcp_config_with_auth(plugins_manager.as_ref(), auth.as_ref())
+        .await;
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
@@ -402,9 +406,9 @@ fn write_cached_accessible_connectors(
     });
 }
 
-async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+async fn tool_suggest_connector_ids(config: &Config, auth: Option<&CodexAuth>) -> HashSet<String> {
     let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(config)
+        .plugins_for_config_with_auth(config, auth)
         .await
         .capability_summaries()
         .iter()
