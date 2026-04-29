@@ -409,6 +409,13 @@
     },
     "SkillSummary": {
       "properties": {
+        "contents": {
+          "description": "Full SKILL.md markdown when the skill cannot be read from a local path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },

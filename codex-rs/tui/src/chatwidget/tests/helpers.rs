@@ -972,6 +972,7 @@ pub(super) fn plugins_test_detail(
                 path: Some(plugins_test_absolute_path(&format!(
                     "skills/{name}/SKILL.md"
                 ))),
+                contents: None,
                 enabled: true,
             })
             .collect(),

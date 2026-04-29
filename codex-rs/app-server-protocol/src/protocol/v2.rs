@@ -4607,22 +4607,6 @@ pub struct PluginReadResponse {
     pub plugin: PluginDetail,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginSkillReadParams {
-    pub remote_marketplace_name: String,
-    pub plugin_name: String,
-    pub skill_name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginSkillReadResponse {
-    pub contents: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -4836,6 +4820,10 @@ pub struct SkillSummary {
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
     pub path: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    /// Full SKILL.md markdown when the skill cannot be read from a local path.
+    pub contents: Option<String>,
     pub enabled: bool,
 }
 

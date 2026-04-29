@@ -611,11 +611,6 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginReadResponse,
     },
-    PluginSkillRead => "plugin/skill/read" {
-        params: v2::PluginSkillReadParams,
-        serialization: global("config"),
-        response: v2::PluginSkillReadResponse,
-    },
     AppsList => "app/list" {
         params: v2::AppsListParams,
         serialization: None,
