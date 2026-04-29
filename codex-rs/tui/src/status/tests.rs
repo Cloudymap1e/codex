@@ -28,6 +28,9 @@ use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
 use tempfile::TempDir;
 
+use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_model_provider_info::ModelProviderInfo;
+
 async fn test_config(temp_home: &TempDir) -> Config {
     let mut config = ConfigBuilder::default()
         .codex_home(temp_home.path().to_path_buf())
@@ -236,6 +239,56 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
     assert_eq!(
         permissions_text_for(&config).as_deref(),
         Some("Custom (workspace-write with network access, on-request)")
+    );
+}
+
+#[tokio::test]
+async fn status_model_provider_uses_bedrock_runtime_base_url() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model_provider_id = "amazon-bedrock".to_string();
+    config.model_provider =
+        ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: Some("eu-west-1".to_string()),
+        }));
+    config.model_provider.base_url =
+        Some("https://bedrock-mantle.us-east-1.api.aws/openai/v1".to_string());
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let runtime_base_url = "https://bedrock-mantle.eu-west-1.api.aws/openai/v1";
+
+    let (composite, _handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        Some(runtime_base_url),
+        test_status_account_display().as_ref(),
+        /*token_info*/ None,
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let rendered = render_lines(&composite.display_lines(/*width*/ 120)).join("\n");
+
+    assert!(
+        rendered.contains(&format!("Amazon Bedrock - {runtime_base_url}")),
+        "expected /status to render runtime Bedrock URL, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("bedrock-mantle.us-east-1"),
+        "expected /status to ignore configured Bedrock base URL, got: {rendered}"
     );
 }
 
@@ -783,6 +836,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, _) = new_status_output_with_rate_limits_handle(
         &config,
+        /*runtime_model_provider_base_url*/ None,
         account_display.as_ref(),
         Some(&token_info),
         &usage,
