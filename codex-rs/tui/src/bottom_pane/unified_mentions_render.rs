@@ -1,3 +1,4 @@
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -8,17 +9,29 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 
+use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
+use crate::bottom_pane::scroll_state::ScrollState;
+use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt;
 
-use super::candidate::MentionType;
-use super::candidate::SearchResult;
-use super::candidate::Selection;
-use super::footer::render_footer;
-use super::search_mode::SearchMode;
-use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
-use crate::bottom_pane::scroll_state::ScrollState;
+use super::unified_mentions_search::MentionType;
+use super::unified_mentions_search::SearchMode;
+use super::unified_mentions_search::SearchResult;
+use super::unified_mentions_search::Selection;
+
+const TAG_WIDTH: usize = "Plugin".len();
+const POPUP_HORIZONTAL_INSET: u16 = 2;
+const CONTENT_TAG_GAP: usize = 2;
+const FOOTER_SECTION_GAP: &str = "  ";
+const CURRENT_DIR_PREFIX: &str = "./";
+const FOOTER_INSERT_KEY: KeyCode = KeyCode::Enter;
+const FOOTER_CLOSE_KEY: KeyCode = KeyCode::Esc;
+const FOOTER_PREVIOUS_MODE_KEY: KeyCode = KeyCode::Left;
+const FOOTER_NEXT_MODE_KEY: KeyCode = KeyCode::Right;
+const FILESYSTEM_ACCENT_COLOR: Color = Color::Cyan;
+const PLUGIN_ACCENT_COLOR: Color = Color::Magenta;
 
 pub(super) fn render_popup(
     area: Rect,
@@ -48,7 +61,10 @@ pub(super) fn render_popup(
 
     render_rows(
         list_area.inset(Insets::tlbr(
-            /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            /*top*/ 0,
+            /*left*/ POPUP_HORIZONTAL_INSET,
+            /*bottom*/ 0,
+            /*right*/ 0,
         )),
         buf,
         rows,
@@ -58,9 +74,9 @@ pub(super) fn render_popup(
 
     if let Some(hint_area) = hint_area {
         let hint_area = Rect {
-            x: hint_area.x + 2,
+            x: hint_area.x + POPUP_HORIZONTAL_INSET,
             y: hint_area.y,
-            width: hint_area.width.saturating_sub(2),
+            width: hint_area.width.saturating_sub(POPUP_HORIZONTAL_INSET),
             height: hint_area.height,
         };
         render_footer(hint_area, buf, search_mode);
@@ -141,9 +157,9 @@ fn build_line(
     } else {
         Style::default().dim()
     };
-    let tag = row.mention_type.span(base_style);
+    let tag = mention_type_tag(row.mention_type, base_style);
     let tag_width = tag.width();
-    let content_width = width.saturating_sub(tag_width.saturating_add(2));
+    let content_width = width.saturating_sub(tag_width.saturating_add(CONTENT_TAG_GAP));
     let content = truncate_line_with_ellipsis_if_overflow(
         content_line(row, base_style, dim_style, primary_column_width),
         content_width,
@@ -160,6 +176,16 @@ fn build_line(
     Line::from(spans)
 }
 
+fn mention_type_tag(mention_type: MentionType, base_style: Style) -> Span<'static> {
+    let style = match mention_type {
+        MentionType::Plugin => base_style.fg(PLUGIN_ACCENT_COLOR),
+        MentionType::Skill => base_style.dim(),
+        MentionType::File => base_style.fg(FILESYSTEM_ACCENT_COLOR),
+        MentionType::Directory => base_style,
+    };
+    format!("{:<width$}", mention_type.label(), width = TAG_WIDTH).set_style(style)
+}
+
 fn content_line(
     row: &SearchResult,
     base_style: Style,
@@ -171,7 +197,7 @@ fn content_line(
     if let Some(secondary) = secondary_line(row, base_style, dim_style) {
         let padding = primary_column_width
             .saturating_sub(primary_text_width(row))
-            .saturating_add(2);
+            .saturating_add(CONTENT_TAG_GAP);
         spans.push(" ".repeat(padding).set_style(dim_style));
         spans.extend(secondary.spans);
     }
@@ -182,7 +208,7 @@ fn content_line(
 fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
     if let Some(file_name) = file_name(row) {
         let style = if row.mention_type == MentionType::File {
-            base_style.fg(Color::Cyan)
+            base_style.fg(FILESYSTEM_ACCENT_COLOR)
         } else {
             base_style
         };
@@ -191,7 +217,7 @@ fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
 
     let mut spans = Vec::with_capacity(row.display_name.len());
     let name_style = match row.mention_type {
-        MentionType::Plugin => base_style.magenta(),
+        MentionType::Plugin => base_style.fg(PLUGIN_ACCENT_COLOR),
         MentionType::Skill => base_style.dim(),
         MentionType::File | MentionType::Directory => base_style,
     };
@@ -224,7 +250,7 @@ fn secondary_line(
             .as_deref()
             .filter(|description| !description.is_empty())
         {
-            spans.push("  ".set_style(dim_style));
+            spans.push(FOOTER_SECTION_GAP.set_style(dim_style));
             spans.push(description.to_string().set_style(dim_style));
         }
         return Some(Line::from(spans));
@@ -241,7 +267,7 @@ fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
     let file_name_start = file_name_start(row);
     let path_style = base_style.dim();
     if file_name_start == 0 {
-        spans.push("./".set_style(path_style));
+        spans.push(CURRENT_DIR_PREFIX.set_style(path_style));
     } else if let Some(indices) = row.match_indices.as_ref() {
         let mut idx_iter = indices.iter().peekable();
         for (char_idx, ch) in row.display_name.chars().enumerate().take(file_name_start) {
@@ -303,4 +329,76 @@ fn file_name_start(row: &SearchResult) -> usize {
             .unwrap_or(0),
         Selection::File(_) | Selection::Tool { .. } => usize::MAX,
     }
+}
+
+fn render_footer(area: Rect, buf: &mut Buffer, search_mode: SearchMode) {
+    let right_line = search_mode_indicator_line(search_mode);
+    let right_width = right_line.width() as u16;
+    let gap = u16::from(right_width > 0);
+    let left_width = area.width.saturating_sub(right_width).saturating_sub(gap);
+    let left_line =
+        truncate_line_with_ellipsis_if_overflow(footer_hint_line(), left_width as usize);
+    left_line.render(
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: left_width,
+            height: 1,
+        },
+        buf,
+    );
+    if right_width > 0 && right_width <= area.width {
+        right_line.render(
+            Rect {
+                x: area.x + area.width - right_width,
+                y: area.y,
+                width: right_width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+}
+
+fn footer_hint_line() -> Line<'static> {
+    Line::from(vec![
+        key_hint::plain(FOOTER_INSERT_KEY).into(),
+        " insert · ".dim(),
+        key_hint::plain(FOOTER_CLOSE_KEY).into(),
+        " close · ".dim(),
+        key_hint::plain(FOOTER_PREVIOUS_MODE_KEY).into(),
+        "/".dim(),
+        key_hint::plain(FOOTER_NEXT_MODE_KEY).into(),
+        " switch search modes".dim(),
+    ])
+}
+
+fn search_mode_indicator_line(active_search_mode: SearchMode) -> Line<'static> {
+    let modes = [
+        SearchMode::Results,
+        SearchMode::FilesystemOnly,
+        SearchMode::Tools,
+    ];
+    let mut spans = Vec::with_capacity(modes.len() * 2 - 1);
+
+    for (index, search_mode) in modes.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(FOOTER_SECTION_GAP.dim());
+        }
+
+        if search_mode == active_search_mode {
+            let label = format!("[{}]", search_mode.label());
+            let style = match search_mode {
+                SearchMode::Results | SearchMode::FilesystemOnly => {
+                    Style::default().fg(FILESYSTEM_ACCENT_COLOR).bold()
+                }
+                SearchMode::Tools => Style::default().fg(PLUGIN_ACCENT_COLOR).bold(),
+            };
+            spans.push(label.set_style(style));
+        } else {
+            spans.push(format!(" {} ", search_mode.label()).dim());
+        }
+    }
+
+    Line::from(spans)
 }

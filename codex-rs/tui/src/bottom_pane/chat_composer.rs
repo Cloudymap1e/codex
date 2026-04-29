@@ -153,7 +153,6 @@ use super::chat_composer_history::HistoryEntryResponse;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
-use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
@@ -178,14 +177,15 @@ use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
-use super::mentions_v2::MentionV2Popup;
-use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
+use super::unified_mentions_popup::UnifiedMentionsPopup;
+use super::unified_mentions_search::Selection as UnifiedMentionsSelection;
+use super::unified_mentions_search::build_search_catalog;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::key_hint::KeyBindingListExt;
@@ -336,7 +336,6 @@ pub(crate) struct ChatComposer {
     quit_shortcut_key: KeyBinding,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
-    dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
@@ -379,6 +378,7 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
+    dismissed_at_popup_token: Option<String>,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
@@ -388,7 +388,6 @@ pub(crate) struct ChatComposer {
     goal_status_indicator: Option<GoalStatusIndicator>,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
-    mentions_v2_enabled: bool,
     fast_command_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
@@ -446,9 +445,8 @@ struct ComposerMentionBinding {
 enum ActivePopup {
     None,
     Command(CommandPopup),
-    File(FileSearchPopup),
     Skill(SkillPopup),
-    MentionV2(MentionV2Popup),
+    UnifiedMentions(UnifiedMentionsPopup),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,7 +539,6 @@ impl ChatComposer {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             esc_backtrack_hint: false,
             use_shift_enter_hint,
-            dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
@@ -568,6 +565,7 @@ impl ChatComposer {
             skills: None,
             plugins: None,
             connectors_snapshot: None,
+            dismissed_at_popup_token: None,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
@@ -577,7 +575,6 @@ impl ChatComposer {
             goal_status_indicator: None,
             connectors_enabled: false,
             plugins_command_enabled: false,
-            mentions_v2_enabled: false,
             fast_command_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
@@ -649,11 +646,6 @@ impl ChatComposer {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.plugins_command_enabled = enabled;
-    }
-
-    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
-        self.mentions_v2_enabled = enabled;
-        self.sync_popups();
     }
 
     /// Toggle composer-side image paste handling.
@@ -784,11 +776,10 @@ impl ChatComposer {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
-            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::Skill(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
-            ActivePopup::MentionV2(popup) => {
+            ActivePopup::UnifiedMentions(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::None => Constraint::Max(footer_total_height),
@@ -1495,11 +1486,7 @@ impl ChatComposer {
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
-        let current_opt = if self.mentions_v2_enabled {
-            self.current_mentions_v2_token()
-        } else {
-            Self::current_at_token(&self.textarea)
-        };
+        let current_opt = Self::current_at_token(&self.textarea);
         let Some(current_token) = current_opt else {
             return;
         };
@@ -1509,10 +1496,7 @@ impl ChatComposer {
         }
 
         match &mut self.active_popup {
-            ActivePopup::File(popup) => {
-                popup.set_matches(&query, matches);
-            }
-            ActivePopup::MentionV2(popup) => {
+            ActivePopup::UnifiedMentions(popup) => {
                 popup.set_file_matches(&query, matches);
             }
             _ => {}
@@ -1587,9 +1571,10 @@ impl ChatComposer {
 
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
-            ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
-            ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
+            ActivePopup::UnifiedMentions(_) => {
+                self.handle_key_event_with_unified_mentions_popup(key_event)
+            }
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         // Update (or hide/show) popup after processing the key.
@@ -1597,7 +1582,7 @@ impl ChatComposer {
         result
     }
 
-    /// Return true if either the slash-command popup or the file-search popup is active.
+    /// Return true if the slash-command popup or a mention popup is active.
     pub(crate) fn popup_active(&self) -> bool {
         self.history_search.is_some() || !matches!(self.active_popup, ActivePopup::None)
     }
@@ -1832,130 +1817,6 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
-    /// Handle key events when file search popup is visible.
-    fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.handle_shortcut_overlay_key(&key_event) {
-            return (InputResult::None, true);
-        }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
-        let ActivePopup::File(popup) = &mut self.active_popup else {
-            unreachable!();
-        };
-
-        match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                popup.move_up();
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                popup.move_down();
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
-                // Hide popup without modifying text, remember token to avoid immediate reopen.
-                if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_file_popup_token = Some(tok);
-                }
-                self.active_popup = ActivePopup::None;
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                let Some(sel) = popup.selected_match() else {
-                    self.active_popup = ActivePopup::None;
-                    return if key_event.code == KeyCode::Enter {
-                        self.handle_key_event_without_popup(key_event)
-                    } else {
-                        (InputResult::None, true)
-                    };
-                };
-
-                let sel_path = sel.to_string_lossy().to_string();
-                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                let is_image = Self::is_image_path(&sel_path);
-                if is_image {
-                    // Determine dimensions; if that fails fall back to normal path insertion.
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                            // using the flat text and byte-offset cursor API.
-                            let cursor_offset = self.textarea.cursor();
-                            let text = self.textarea.text();
-                            // Clamp to a valid char boundary to avoid panics when slicing.
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            // Determine token boundaries in the full text.
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.textarea.replace_range(start_idx..end_idx, "");
-                            self.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            // Add a trailing space to keep typing fluid.
-                            self.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            // Fallback to plain path insertion if metadata read fails.
-                            self.insert_selected_path(&sel_path);
-                        }
-                    }
-                } else {
-                    // Non-image: inserting file path.
-                    self.insert_selected_path(&sel_path);
-                }
-                self.active_popup = ActivePopup::None;
-                (InputResult::None, true)
-            }
-            input => self.handle_input_basic(input),
-        }
-    }
-
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
@@ -2029,7 +1890,7 @@ impl ChatComposer {
         result
     }
 
-    fn handle_key_event_with_mentions_v2_popup(
+    fn handle_key_event_with_unified_mentions_popup(
         &mut self,
         key_event: KeyEvent,
     ) -> (InputResult, bool) {
@@ -2038,11 +1899,11 @@ impl ChatComposer {
         }
         self.footer_mode = reset_mode_after_activity(self.footer_mode);
 
-        let ActivePopup::MentionV2(popup) = &mut self.active_popup else {
+        let ActivePopup::UnifiedMentions(popup) = &mut self.active_popup else {
             unreachable!();
         };
 
-        let mut selected: Option<MentionV2Selection> = None;
+        let mut selected: Option<UnifiedMentionsSelection> = None;
         let mut close_popup = false;
 
         let result = match key_event {
@@ -2088,8 +1949,8 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_mentions_v2_token() {
-                    self.dismissed_mention_popup_token = Some(tok);
+                if let Some(tok) = Self::current_at_token(&self.textarea) {
+                    self.dismissed_at_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -2102,7 +1963,15 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                selected = popup.selected();
+                let Some(active_selection) = popup.selected() else {
+                    self.active_popup = ActivePopup::None;
+                    return if key_event.code == KeyCode::Enter {
+                        self.handle_key_event_without_popup(key_event)
+                    } else {
+                        (InputResult::None, true)
+                    };
+                };
+                selected = Some(active_selection);
                 close_popup = true;
                 (InputResult::None, true)
             }
@@ -2112,10 +1981,10 @@ impl ChatComposer {
         if close_popup {
             if let Some(selected) = selected {
                 match selected {
-                    MentionV2Selection::File(path) => {
+                    UnifiedMentionsSelection::File(path) => {
                         self.insert_selected_file_path(path.to_string_lossy().as_ref());
                     }
-                    MentionV2Selection::Tool { insert_text, path } => {
+                    UnifiedMentionsSelection::Tool { insert_text, path } => {
                         self.insert_selected_mention(&insert_text, path.as_deref());
                     }
                 }
@@ -2427,13 +2296,6 @@ impl ChatComposer {
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
-    }
-
-    fn current_mentions_v2_token(&self) -> Option<String> {
-        if !self.mentions_v2_enabled {
-            return None;
-        }
-        Self::current_prefixed_token(&self.textarea, '@', /*allow_empty*/ true)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -3577,7 +3439,7 @@ impl ChatComposer {
                 self.current_file_query = None;
             }
             self.active_popup = ActivePopup::None;
-            self.dismissed_file_popup_token = None;
+            self.dismissed_at_popup_token = None;
             self.dismissed_mention_popup_token = None;
             return;
         }
@@ -3585,12 +3447,7 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let mentions_v2_token = self.current_mentions_v2_token();
-        let file_token = if self.mentions_v2_enabled {
-            None
-        } else {
-            Self::current_at_token(&self.textarea)
-        };
+        let at_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
             .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
@@ -3609,8 +3466,7 @@ impl ChatComposer {
 
         let allow_command_popup = self.slash_commands_enabled()
             && !self.is_bash_mode
-            && file_token.is_none()
-            && mentions_v2_token.is_none()
+            && at_token.is_none()
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
@@ -3620,13 +3476,13 @@ impl ChatComposer {
                     .send(AppEvent::StartFileSearch(String::new()));
                 self.current_file_query = None;
             }
-            self.dismissed_file_popup_token = None;
+            self.dismissed_at_popup_token = None;
             self.dismissed_mention_popup_token = None;
             return;
         }
 
-        if let Some(token) = mentions_v2_token {
-            self.sync_mentions_v2_popup(token);
+        if let Some(token) = at_token {
+            self.sync_unified_mentions_popup(token);
             return;
         }
 
@@ -3639,22 +3495,17 @@ impl ChatComposer {
             self.sync_mention_popup(token);
             return;
         }
+        self.dismissed_at_popup_token = None;
         self.dismissed_mention_popup_token = None;
-
-        if let Some(token) = file_token {
-            self.sync_file_search_popup(token);
-            return;
-        }
 
         if self.current_file_query.is_some() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(String::new()));
             self.current_file_query = None;
         }
-        self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::MentionV2(_)
+            ActivePopup::Skill(_) | ActivePopup::UnifiedMentions(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -3790,8 +3641,8 @@ impl ChatComposer {
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
 
         // If the cursor is currently positioned within an `@token`, prefer the
-        // file-search popup over the slash popup so users can insert a file path
-        // as an argument to the command (e.g., "/review @docs/...").
+        // unified mention popup over the slash popup so users can insert a path
+        // or tool mention as an argument to the command.
         if Self::current_at_token(&self.textarea).is_some() {
             if matches!(self.active_popup, ActivePopup::Command(_)) {
                 self.active_popup = ActivePopup::None;
@@ -3835,49 +3686,6 @@ impl ChatComposer {
         }
     }
 
-    /// Synchronize `self.file_search_popup` with the current text in the textarea.
-    /// Note this is only called when self.active_popup is NOT Command.
-    fn sync_file_search_popup(&mut self, query: String) {
-        // If user dismissed popup for this exact query, don't reopen until text changes.
-        if self.dismissed_file_popup_token.as_ref() == Some(&query) {
-            return;
-        }
-
-        if query.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(String::new()));
-        } else {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(query.clone()));
-        }
-
-        match &mut self.active_popup {
-            ActivePopup::File(popup) => {
-                if query.is_empty() {
-                    popup.set_empty_prompt();
-                } else {
-                    popup.set_query(&query);
-                }
-            }
-            _ => {
-                let mut popup = FileSearchPopup::new();
-                if query.is_empty() {
-                    popup.set_empty_prompt();
-                } else {
-                    popup.set_query(&query);
-                }
-                self.active_popup = ActivePopup::File(popup);
-            }
-        }
-
-        if query.is_empty() {
-            self.current_file_query = None;
-        } else {
-            self.current_file_query = Some(query);
-        }
-        self.dismissed_file_popup_token = None;
-    }
-
     fn sync_mention_popup(&mut self, query: String) {
         if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
             return;
@@ -3902,8 +3710,8 @@ impl ChatComposer {
         }
     }
 
-    fn sync_mentions_v2_popup(&mut self, query: String) {
-        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+    fn sync_unified_mentions_popup(&mut self, query: String) {
+        if self.dismissed_at_popup_token.as_ref() == Some(&query) {
             return;
         }
 
@@ -3917,24 +3725,21 @@ impl ChatComposer {
             self.current_file_query = Some(query.clone());
         }
 
-        let candidates = super::mentions_v2::build_search_catalog(
-            self.skills.as_deref(),
-            self.plugins.as_deref(),
-        );
+        let candidates = build_search_catalog(self.skills.as_deref(), self.plugins.as_deref());
 
         match &mut self.active_popup {
-            ActivePopup::MentionV2(popup) => {
+            ActivePopup::UnifiedMentions(popup) => {
                 popup.set_query(&query);
                 popup.set_candidates(candidates);
             }
             _ => {
-                let mut popup = MentionV2Popup::new(candidates);
+                let mut popup = UnifiedMentionsPopup::new(candidates);
                 popup.set_query(&query);
-                self.active_popup = ActivePopup::MentionV2(popup);
+                self.active_popup = ActivePopup::UnifiedMentions(popup);
             }
         }
 
-        self.dismissed_mention_popup_token = None;
+        self.dismissed_at_popup_token = None;
     }
 
     fn mention_items(&self) -> Vec<MentionItem> {
@@ -4250,9 +4055,8 @@ impl Renderable for ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
-                ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
-                ActivePopup::MentionV2(c) => c.calculate_required_height(width),
+                ActivePopup::UnifiedMentions(c) => c.calculate_required_height(width),
             }
     }
 
@@ -4269,13 +4073,10 @@ impl ChatComposer {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
-            ActivePopup::File(popup) => {
-                popup.render_ref(popup_rect, buf);
-            }
             ActivePopup::Skill(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
-            ActivePopup::MentionV2(popup) => {
+            ActivePopup::UnifiedMentions(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -6348,7 +6149,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_submits_when_file_popup_has_no_selection() {
+    fn enter_submits_when_unified_at_popup_has_no_selection() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6368,7 +6169,10 @@ mod tests {
         composer.textarea.set_cursor(input.len());
         composer.sync_popups();
 
-        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
+        assert!(matches!(
+            composer.active_popup,
+            ActivePopup::UnifiedMentions(_)
+        ));
 
         let (result, consumed) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

@@ -87,15 +87,16 @@ mod chat_composer_history;
 mod command_popup;
 pub(crate) mod custom_prompt_view;
 mod experimental_features_view;
-mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
-mod mentions_v2;
 pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
+mod unified_mentions_popup;
+mod unified_mentions_render;
+mod unified_mentions_search;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
@@ -309,11 +310,6 @@ impl BottomPane {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
-        self.composer.set_mentions_v2_enabled(enabled);
         self.request_redraw();
     }
 
