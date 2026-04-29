@@ -1373,6 +1373,14 @@
     "item": {
       "$ref": "#/definitions/ThreadItem"
     },
+    "startedAtMs": {
+      "description": "Unix timestamp (in milliseconds) when the item started, if known.",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "threadId": {
       "type": "string"
     },

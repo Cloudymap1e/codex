@@ -158,6 +158,7 @@ async fn process_review_events(
             // would trigger legacy AgentMessage via as_legacy_events(), which this
             // review flow intentionally hides in favor of structured output.
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                completed_at_ms: None,
                 item: TurnItem::AgentMessage(_),
                 ..
             })

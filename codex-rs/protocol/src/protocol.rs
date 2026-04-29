@@ -1823,6 +1823,9 @@ pub struct RawResponseItemEvent {
 pub struct ItemStartedEvent {
     pub thread_id: ThreadId,
     pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
     pub item: TurnItem,
 }
 
@@ -1846,6 +1849,12 @@ impl HasLegacyEvent for ItemStartedEvent {
 pub struct ItemCompletedEvent {
     pub thread_id: ThreadId,
     pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub completed_at_ms: Option<i64>,
     pub item: TurnItem,
 }
 
@@ -4567,6 +4576,7 @@ mod tests {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: None,
             item: TurnItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
                 query: "find docs".into(),
@@ -4590,6 +4600,7 @@ mod tests {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: None,
             item: TurnItem::UserMessage(UserMessageItem::new(&[])),
         };
 
@@ -4605,6 +4616,7 @@ mod tests {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            started_at_ms: None,
             item: TurnItem::ImageGeneration(ImageGenerationItem {
                 id: "ig-1".into(),
                 status: "in_progress".into(),
@@ -4627,6 +4639,7 @@ mod tests {
         let event = ItemCompletedEvent {
             thread_id: ThreadId::new(),
             turn_id: "turn-1".into(),
+            completed_at_ms: None,
             item: TurnItem::ImageGeneration(ImageGenerationItem {
                 id: "ig-1".into(),
                 status: "completed".into(),

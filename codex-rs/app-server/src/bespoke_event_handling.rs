@@ -628,6 +628,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         let notification = ItemStartedNotification {
                             thread_id: conversation_id.to_string(),
                             turn_id: event_turn_id.clone(),
+                            started_at_ms: None,
                             item,
                         };
                         outgoing
@@ -1009,6 +1010,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
+                    started_at_ms: None,
                     item,
                 };
                 outgoing
@@ -1081,6 +1083,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ItemCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: response.turn_id,
+                    started_at_ms: None,
+                    completed_at_ms: None,
                     item,
                 };
                 outgoing
@@ -1126,6 +1130,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item,
             };
             outgoing
@@ -1165,6 +1170,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1187,6 +1194,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item,
             };
             outgoing
@@ -1215,6 +1223,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1241,6 +1251,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item,
             };
             outgoing
@@ -1279,6 +1290,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1300,6 +1313,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item,
             };
             outgoing
@@ -1342,6 +1356,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1353,6 +1369,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item,
             };
             outgoing
@@ -1364,6 +1381,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1528,6 +1547,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item: item.clone(),
             };
             outgoing
@@ -1536,6 +1556,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1553,6 +1575,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item: item.clone(),
             };
             outgoing
@@ -1561,6 +1584,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1572,6 +1597,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: item_started_event.started_at_ms,
                 item,
             };
             outgoing
@@ -1583,6 +1609,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: item_completed_event.started_at_ms,
+                completed_at_ms: item_completed_event.completed_at_ms,
                 item,
             };
             outgoing
@@ -1625,6 +1653,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
                 item: item.clone(),
             };
             outgoing
@@ -1633,6 +1662,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -1674,6 +1705,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
+                    started_at_ms: None,
                     item,
                 };
                 outgoing
@@ -1750,6 +1782,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
+                    started_at_ms: None,
                     item,
                 };
                 outgoing
@@ -1838,6 +1871,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                started_at_ms: None,
+                completed_at_ms: None,
                 item,
             };
             outgoing
@@ -2111,6 +2146,8 @@ async fn complete_file_change_item(
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id,
+        started_at_ms: None,
+        completed_at_ms: None,
         item,
     };
     outgoing
@@ -2141,6 +2178,7 @@ async fn start_command_execution_item(
         let notification = ItemStartedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,
+            started_at_ms: None,
             item: ThreadItem::CommandExecution {
                 id: item_id,
                 command,
@@ -2200,6 +2238,8 @@ async fn complete_command_execution_item(
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id,
+        started_at_ms: None,
+        completed_at_ms: None,
         item,
     };
     outgoing
@@ -2257,6 +2297,8 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: turn_id.to_string(),
+        started_at_ms: None,
+        completed_at_ms: None,
         item: ThreadItem::HookPrompt {
             id: hook_prompt.id,
             fragments: hook_prompt
@@ -3062,6 +3104,7 @@ async fn construct_mcp_tool_call_notification(
     ItemStartedNotification {
         thread_id,
         turn_id,
+        started_at_ms: None,
         item,
     }
 }
@@ -3110,6 +3153,8 @@ async fn construct_mcp_tool_call_end_notification(
     ItemCompletedNotification {
         thread_id,
         turn_id,
+        started_at_ms: None,
+        completed_at_ms: None,
         item,
     }
 }
@@ -4596,6 +4641,7 @@ mod tests {
         let expected = ItemStartedNotification {
             thread_id,
             turn_id,
+            started_at_ms: None,
             item: ThreadItem::McpToolCall {
                 id: begin_event.call_id,
                 server: begin_event.invocation.server,
@@ -4761,6 +4807,7 @@ mod tests {
         let expected = ItemStartedNotification {
             thread_id,
             turn_id,
+            started_at_ms: None,
             item: ThreadItem::McpToolCall {
                 id: begin_event.call_id,
                 server: begin_event.invocation.server,
@@ -4816,6 +4863,8 @@ mod tests {
         let expected = ItemCompletedNotification {
             thread_id,
             turn_id,
+            started_at_ms: None,
+            completed_at_ms: None,
             item: ThreadItem::McpToolCall {
                 id: end_event.call_id,
                 server: end_event.invocation.server,
@@ -4864,6 +4913,8 @@ mod tests {
         let expected = ItemCompletedNotification {
             thread_id,
             turn_id,
+            started_at_ms: None,
+            completed_at_ms: None,
             item: ThreadItem::McpToolCall {
                 id: end_event.call_id,
                 server: end_event.invocation.server,

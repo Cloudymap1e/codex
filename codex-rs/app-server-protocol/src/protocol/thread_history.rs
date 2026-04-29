@@ -1347,6 +1347,7 @@ mod tests {
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id,
                 turn_id: turn_id.to_string(),
+                started_at_ms: None,
                 item: CoreTurnItem::UserMessage(CoreUserMessageItem {
                     id: "user-item-id".to_string(),
                     content: Vec::new(),
