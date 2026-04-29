@@ -41,6 +41,7 @@ use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEn
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
+use codex_protocol::models::MemoryPermissions as CoreMemoryPermissions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -1419,6 +1420,13 @@ pub struct PermissionProfileNetworkPermissions {
     pub enabled: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileMemoryPermissions {
+    pub isolated: bool,
+}
+
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
     fn from(value: CoreNetworkPermissions) -> Self {
         Self {
@@ -1450,6 +1458,28 @@ impl From<PermissionProfileNetworkPermissions> for CoreNetworkSandboxPolicy {
         } else {
             Self::Restricted
         }
+    }
+}
+
+impl From<CoreMemoryPermissions> for PermissionProfileMemoryPermissions {
+    fn from(value: CoreMemoryPermissions) -> Self {
+        Self {
+            isolated: value.isolated,
+        }
+    }
+}
+
+impl From<PermissionProfileMemoryPermissions> for CoreMemoryPermissions {
+    fn from(value: PermissionProfileMemoryPermissions) -> Self {
+        Self {
+            isolated: value.isolated,
+        }
+    }
+}
+
+impl Default for PermissionProfileMemoryPermissions {
+    fn default() -> Self {
+        CoreMemoryPermissions::default().into()
     }
 }
 
@@ -1656,6 +1686,8 @@ pub enum PermissionProfile {
     Managed {
         network: PermissionProfileNetworkPermissions,
         file_system: PermissionProfileFileSystemPermissions,
+        #[serde(default)]
+        memory: PermissionProfileMemoryPermissions,
     },
     /// Do not apply an outer sandbox.
     Disabled,
@@ -1673,9 +1705,11 @@ impl From<CorePermissionProfile> for PermissionProfile {
             CorePermissionProfile::Managed {
                 file_system,
                 network,
+                memory,
             } => Self::Managed {
                 network: network.into(),
                 file_system: file_system.into(),
+                memory: memory.into(),
             },
             CorePermissionProfile::Disabled => Self::Disabled,
             CorePermissionProfile::External { network } => Self::External {
@@ -1691,9 +1725,11 @@ impl From<PermissionProfile> for CorePermissionProfile {
             PermissionProfile::Managed {
                 file_system,
                 network,
+                memory,
             } => Self::Managed {
                 file_system: file_system.into(),
                 network: network.into(),
+                memory: memory.into(),
             },
             PermissionProfile::Disabled => Self::Disabled,
             PermissionProfile::External { network } => Self::External {
@@ -8250,6 +8286,18 @@ mod tests {
             "globScanMaxDepth": 0,
         }))
         .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
+    fn permission_profile_memory_permissions_preserves_isolation() {
+        let core_permissions = CoreMemoryPermissions::shared();
+        let permissions = PermissionProfileMemoryPermissions::from(core_permissions);
+
+        assert_eq!(
+            permissions,
+            PermissionProfileMemoryPermissions { isolated: false }
+        );
+        assert_eq!(CoreMemoryPermissions::from(permissions), core_permissions);
     }
 
     #[test]

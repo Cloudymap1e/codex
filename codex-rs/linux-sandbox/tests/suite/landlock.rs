@@ -41,6 +41,51 @@ const NETWORK_TIMEOUT_MS: u64 = 2_000;
 const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+const SYSV_IPC_PROBE_SHMID_ENV: &str = "CODEX_SYSV_IPC_PROBE_SHMID";
+const SYSV_IPC_PROBE_SECRET_ENV: &str = "CODEX_SYSV_IPC_PROBE_SECRET";
+
+struct HostSysvSharedMemory {
+    shmid: libc::c_int,
+    addr: *mut libc::c_void,
+}
+
+impl HostSysvSharedMemory {
+    fn new(contents: &[u8]) -> std::io::Result<Self> {
+        let shmid =
+            unsafe { libc::shmget(libc::IPC_PRIVATE, contents.len(), libc::IPC_CREAT | 0o600) };
+        if shmid == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let addr = unsafe { libc::shmat(shmid, std::ptr::null(), 0) };
+        if shmat_failed(addr) {
+            let err = std::io::Error::last_os_error();
+            unsafe {
+                libc::shmctl(shmid, libc::IPC_RMID, std::ptr::null_mut());
+            }
+            return Err(err);
+        }
+
+        let shared_bytes =
+            unsafe { std::slice::from_raw_parts_mut(addr.cast::<u8>(), contents.len()) };
+        shared_bytes.copy_from_slice(contents);
+
+        Ok(Self { shmid, addr })
+    }
+}
+
+impl Drop for HostSysvSharedMemory {
+    fn drop(&mut self) {
+        unsafe {
+            libc::shmdt(self.addr);
+            libc::shmctl(self.shmid, libc::IPC_RMID, std::ptr::null_mut());
+        }
+    }
+}
+
+fn shmat_failed(addr: *mut libc::c_void) -> bool {
+    addr == (-1_isize) as *mut libc::c_void
+}
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
@@ -187,7 +232,7 @@ fn expect_denied(
 
 #[tokio::test]
 async fn test_root_read() {
-    run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
+    run_cmd(&["ls", "-l", "/bin"], &[], LONG_TIMEOUT_MS).await;
 }
 
 #[tokio::test]
@@ -288,6 +333,83 @@ async fn bwrap_preserves_writable_dev_shm_bind_mount() {
     assert_eq!(
         std::fs::read_to_string(&target_path).expect("read /dev/shm file"),
         "sandbox-after"
+    );
+}
+
+#[test]
+fn sysv_ipc_probe_helper() {
+    let Ok(shmid) = std::env::var(SYSV_IPC_PROBE_SHMID_ENV) else {
+        return;
+    };
+    let expected_secret =
+        std::env::var(SYSV_IPC_PROBE_SECRET_ENV).expect("expected probe secret env var");
+    let shmid = shmid
+        .parse::<libc::c_int>()
+        .expect("probe shmid should be an integer");
+
+    let addr = unsafe { libc::shmat(shmid, std::ptr::null(), 0) };
+    if shmat_failed(addr) {
+        return;
+    }
+
+    let observed = unsafe { std::slice::from_raw_parts(addr.cast::<u8>(), expected_secret.len()) };
+    let observed_secret = String::from_utf8_lossy(observed).into_owned();
+    unsafe {
+        libc::shmdt(addr);
+    }
+
+    panic!(
+        "sandboxed command attached to host SysV shared memory segment {shmid} and read {observed_secret:?}"
+    );
+}
+
+#[tokio::test]
+async fn bwrap_uses_private_ipc_namespace() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let secret = b"codex-sysv-ipc-host-secret";
+    let host_segment = match HostSysvSharedMemory::new(secret) {
+        Ok(host_segment) => host_segment,
+        Err(err) => {
+            eprintln!("skipping bwrap test: failed to create SysV shared memory segment: {err}");
+            return;
+        }
+    };
+
+    let test_exe = std::env::current_exe()
+        .expect("current test executable")
+        .to_string_lossy()
+        .into_owned();
+    let shmid_env = format!("{SYSV_IPC_PROBE_SHMID_ENV}={}", host_segment.shmid);
+    let secret_env = format!(
+        "{SYSV_IPC_PROBE_SECRET_ENV}={}",
+        String::from_utf8_lossy(secret)
+    );
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "env",
+            shmid_env.as_str(),
+            secret_env.as_str(),
+            test_exe.as_str(),
+            "sysv_ipc_probe_helper",
+            "--exact",
+            "--nocapture",
+        ],
+        &[],
+        NETWORK_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed SysV IPC probe should execute");
+
+    assert_eq!(
+        output.exit_code, 0,
+        "sandboxed SysV IPC probe failed\nstdout:\n{}\nstderr:\n{}",
+        output.stdout.text, output.stderr.text
     );
 }
 

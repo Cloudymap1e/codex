@@ -80,6 +80,7 @@ fn unified_exec_is_blocked_for_windows_managed_profiles_only() {
         &PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
+            memory: Default::default(),
         },
         WindowsSandboxLevel::RestrictedToken,
     ));

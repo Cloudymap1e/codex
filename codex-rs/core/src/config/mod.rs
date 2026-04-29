@@ -2066,8 +2066,7 @@ impl Config {
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
+                permission_profile = permission_profile.with_runtime_permissions(
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 );
@@ -2181,8 +2180,7 @@ impl Config {
                 // entries.
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
+                permission_profile = permission_profile.with_runtime_permissions(
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 );
@@ -2626,8 +2624,7 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
-        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            effective_permission_profile.enforcement(),
+        let effective_permission_profile = effective_permission_profile.with_runtime_permissions(
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
         );

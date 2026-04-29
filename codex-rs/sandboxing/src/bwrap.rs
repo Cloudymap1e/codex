@@ -41,6 +41,7 @@ fn should_warn_about_system_bwrap(permission_profile: &PermissionProfile) -> boo
     should_require_platform_sandbox(
         &file_system_policy,
         network_policy,
+        permission_profile.memory_permissions(),
         /*has_managed_network_requirements*/ false,
     )
 }

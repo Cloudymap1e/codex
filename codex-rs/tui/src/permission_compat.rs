@@ -87,6 +87,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            memory: Default::default(),
         };
 
         let compatibility_profile =

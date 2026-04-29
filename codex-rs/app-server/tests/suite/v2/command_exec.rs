@@ -21,6 +21,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileMemoryPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
@@ -1064,6 +1065,7 @@ fn decode_delta_notification(
 fn root_read_only_permission_profile() -> PermissionProfile {
     PermissionProfile::Managed {
         network: PermissionProfileNetworkPermissions { enabled: false },
+        memory: PermissionProfileMemoryPermissions::default(),
         file_system: PermissionProfileFileSystemPermissions::Restricted {
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {

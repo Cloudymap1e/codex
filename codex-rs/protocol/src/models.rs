@@ -210,6 +210,31 @@ impl NetworkPermissions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MemoryPermissions {
+    pub isolated: bool,
+}
+
+impl Default for MemoryPermissions {
+    fn default() -> Self {
+        Self::isolated()
+    }
+}
+
+impl MemoryPermissions {
+    pub const fn isolated() -> Self {
+        Self { isolated: true }
+    }
+
+    pub const fn shared() -> Self {
+        Self { isolated: false }
+    }
+
+    pub fn is_isolated(self) -> bool {
+        self.isolated
+    }
+}
+
 /// Partial permission overlay used for per-command requests and approved
 /// session/turn grants.
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -308,6 +333,8 @@ pub enum PermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default)]
+        memory: MemoryPermissions,
     },
     /// Do not apply an outer sandbox.
     Disabled,
@@ -325,6 +352,7 @@ impl Default for PermissionProfile {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            memory: MemoryPermissions::default(),
         }
     }
 }
@@ -343,6 +371,7 @@ impl PermissionProfile {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            memory: MemoryPermissions::default(),
         }
     }
 
@@ -379,6 +408,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+            memory: MemoryPermissions::default(),
         }
     }
 
@@ -404,6 +434,20 @@ impl PermissionProfile {
         file_system_sandbox_policy: &FileSystemSandboxPolicy,
         network_sandbox_policy: NetworkSandboxPolicy,
     ) -> Self {
+        Self::from_runtime_permissions_with_enforcement_and_memory(
+            enforcement,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            MemoryPermissions::default(),
+        )
+    }
+
+    pub fn from_runtime_permissions_with_enforcement_and_memory(
+        enforcement: SandboxEnforcement,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+        memory: MemoryPermissions,
+    ) -> Self {
         match file_system_sandbox_policy.kind {
             FileSystemSandboxKind::ExternalSandbox => Self::External {
                 network: network_sandbox_policy,
@@ -417,6 +461,7 @@ impl PermissionProfile {
                         file_system_sandbox_policy,
                     ),
                     network: network_sandbox_policy,
+                    memory,
                 }
             }
         }
@@ -435,6 +480,19 @@ impl PermissionProfile {
             SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
             &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd),
             NetworkSandboxPolicy::from(sandbox_policy),
+        )
+    }
+
+    pub fn with_runtime_permissions(
+        &self,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+    ) -> Self {
+        Self::from_runtime_permissions_with_enforcement_and_memory(
+            self.enforcement(),
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            self.memory_permissions(),
         )
     }
 
@@ -461,11 +519,19 @@ impl PermissionProfile {
         }
     }
 
+    pub fn memory_permissions(&self) -> MemoryPermissions {
+        match self {
+            Self::Managed { memory, .. } => *memory,
+            Self::Disabled | Self::External { .. } => MemoryPermissions::shared(),
+        }
+    }
+
     pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
         match self {
             Self::Managed {
                 file_system,
                 network,
+                memory: _,
             } => file_system
                 .to_sandbox_policy()
                 .to_legacy_sandbox_policy(*network, cwd),
@@ -495,6 +561,8 @@ enum TaggedPermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default)]
+        memory: MemoryPermissions,
     },
     Disabled,
     #[serde(rename_all = "snake_case")]
@@ -509,9 +577,11 @@ impl From<TaggedPermissionProfile> for PermissionProfile {
             TaggedPermissionProfile::Managed {
                 file_system,
                 network,
+                memory,
             } => Self::Managed {
                 file_system,
                 network,
+                memory,
             },
             TaggedPermissionProfile::Disabled => Self::Disabled,
             TaggedPermissionProfile::External { network } => Self::External { network },
@@ -1779,6 +1849,7 @@ mod tests {
                     glob_scan_max_depth: NonZeroUsize::new(2),
                 },
                 network: NetworkSandboxPolicy::Enabled,
+                memory: MemoryPermissions::default(),
             }
         );
         Ok(())
@@ -1796,6 +1867,55 @@ mod tests {
                 &SandboxPolicy::new_workspace_write_policy()
             )
         );
+    }
+
+    #[test]
+    fn managed_permission_profiles_default_to_memory_isolation() {
+        assert_eq!(
+            PermissionProfile::workspace_write().memory_permissions(),
+            MemoryPermissions::default()
+        );
+        assert_eq!(
+            (PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                network: NetworkSandboxPolicy::Enabled,
+                memory: MemoryPermissions::shared(),
+            })
+            .memory_permissions(),
+            MemoryPermissions::shared()
+        );
+        assert_eq!(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::Managed,
+                &FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Enabled,
+            )
+            .memory_permissions(),
+            MemoryPermissions::default()
+        );
+        assert_eq!(
+            PermissionProfile::Disabled.memory_permissions(),
+            MemoryPermissions::shared()
+        );
+    }
+
+    #[test]
+    fn tagged_permission_profile_defaults_missing_memory_permissions() -> Result<()> {
+        let tagged = serde_json::json!({
+            "type": "managed",
+            "file_system": {
+                "type": "unrestricted",
+            },
+            "network": "enabled",
+        });
+
+        let permission_profile: PermissionProfile = serde_json::from_value(tagged)?;
+
+        assert_eq!(
+            permission_profile.memory_permissions(),
+            MemoryPermissions::default()
+        );
+        Ok(())
     }
 
     #[test]
@@ -1866,6 +1986,7 @@ mod tests {
             PermissionProfile::Managed {
                 file_system: ManagedFileSystemPermissions::Unrestricted,
                 network: NetworkSandboxPolicy::Restricted,
+                memory: MemoryPermissions::default(),
             },
             "the legacy ExternalSandbox projection must not hide a split unrestricted filesystem policy"
         );

@@ -362,6 +362,7 @@ fn unified_exec_allowed_in_environment(
         PermissionProfile::Managed {
             file_system,
             network,
+            memory: _,
         } => !file_system.to_sandbox_policy().has_full_disk_write_access() || !network.is_enabled(),
         PermissionProfile::Disabled | PermissionProfile::External { .. } => false,
     };

@@ -253,6 +253,7 @@ async fn status_permissions_full_disk_managed_with_network_is_danger_full_access
         .set_permission_profile(PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Enabled,
+            memory: Default::default(),
         })
         .expect("set permission profile");
 
@@ -276,6 +277,7 @@ async fn status_permissions_full_disk_managed_without_network_is_external_sandbo
         .set_permission_profile(PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Restricted,
+            memory: Default::default(),
         })
         .expect("set permission profile");
 

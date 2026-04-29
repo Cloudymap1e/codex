@@ -7,6 +7,7 @@ use super::get_platform_sandbox;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -27,6 +28,7 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Enabled,
+        MemoryPermissions::shared(),
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ false,
@@ -42,6 +44,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Enabled,
+        MemoryPermissions::shared(),
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ true,
@@ -62,6 +65,7 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
             access: FileSystemAccessMode::Read,
         }]),
         NetworkSandboxPolicy::Enabled,
+        MemoryPermissions::default(),
         SandboxablePreference::Auto,
         WindowsSandboxLevel::Disabled,
         /*has_managed_network_requirements*/ false,

@@ -3,6 +3,7 @@ use super::permission_profile_sandbox_tag;
 use super::sandbox_tag;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -73,11 +74,15 @@ fn profile_sandbox_tag_distinguishes_disabled_from_external() {
 }
 
 #[test]
-fn unrestricted_managed_profile_with_enabled_network_is_untagged() {
+fn unrestricted_managed_profile_with_enabled_network_still_uses_memory_sandbox() {
     let profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        memory: MemoryPermissions::default(),
     };
+    let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .map(SandboxType::as_metric_tag)
+        .unwrap_or("none");
 
     assert_eq!(
         permission_profile_sandbox_tag(
@@ -85,12 +90,12 @@ fn unrestricted_managed_profile_with_enabled_network_is_untagged() {
             WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
         ),
-        "none"
+        expected
     );
 }
 
 #[test]
-fn root_write_managed_profile_with_enabled_network_is_untagged() {
+fn root_write_managed_profile_with_enabled_network_still_uses_memory_sandbox() {
     let profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![FileSystemSandboxEntry {
@@ -102,7 +107,11 @@ fn root_write_managed_profile_with_enabled_network_is_untagged() {
             glob_scan_max_depth: None,
         },
         network: NetworkSandboxPolicy::Enabled,
+        memory: MemoryPermissions::default(),
     };
+    let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
+        .map(SandboxType::as_metric_tag)
+        .unwrap_or("none");
 
     assert_eq!(
         permission_profile_sandbox_tag(
@@ -110,7 +119,7 @@ fn root_write_managed_profile_with_enabled_network_is_untagged() {
             WindowsSandboxLevel::Disabled,
             /*enforce_managed_network*/ false,
         ),
-        "none"
+        expected
     );
 }
 
@@ -119,6 +128,7 @@ fn managed_network_enforcement_tags_unrestricted_profiles_as_sandboxed() {
     let profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        memory: MemoryPermissions::default(),
     };
     let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .map(SandboxType::as_metric_tag)

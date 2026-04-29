@@ -30,11 +30,13 @@ pub(crate) fn permission_profile_sandbox_tag(
         PermissionProfile::Managed {
             file_system,
             network,
+            memory,
         } => {
             let file_system_policy = file_system.to_sandbox_policy();
             if !should_require_platform_sandbox(
                 &file_system_policy,
                 *network,
+                *memory,
                 enforce_managed_network,
             ) {
                 return "none";

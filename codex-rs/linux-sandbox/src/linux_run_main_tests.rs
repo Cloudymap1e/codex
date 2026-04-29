@@ -5,6 +5,8 @@ use codex_protocol::models::PermissionProfile;
 #[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
+use codex_protocol::protocol::MemoryPermissions;
+#[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
 #[cfg(test)]
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -76,6 +78,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "/dev".to_string(),
             "--unshare-user".to_string(),
             "--unshare-pid".to_string(),
+            "--unshare-ipc".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),
             "--argv0".to_string(),
@@ -260,6 +263,7 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         Path::new("/"),
         &FileSystemSandboxPolicy::unrestricted(),
         mode,
+        MemoryPermissions::default(),
     )
     .args;
     assert!(argv.iter().any(|arg| arg == "--"));
@@ -346,6 +350,7 @@ fn resolve_permission_profile_derives_runtime_policies() {
         resolved.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
     );
+    assert_eq!(resolved.memory_permissions, MemoryPermissions::default());
 }
 
 #[test]
@@ -382,6 +387,7 @@ fn resolve_permission_profile_preserves_direct_runtime_profile() {
         resolved.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
     );
+    assert_eq!(resolved.memory_permissions, MemoryPermissions::default());
 }
 
 #[test]

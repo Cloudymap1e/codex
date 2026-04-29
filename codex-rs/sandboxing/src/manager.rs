@@ -10,6 +10,7 @@ use crate::policy_transforms::should_require_platform_sandbox;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -140,6 +141,7 @@ impl SandboxManager {
         &self,
         file_system_policy: &FileSystemSandboxPolicy,
         network_policy: NetworkSandboxPolicy,
+        memory_permissions: MemoryPermissions,
         pref: SandboxablePreference,
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
@@ -154,6 +156,7 @@ impl SandboxManager {
                 if should_require_platform_sandbox(
                     file_system_policy,
                     network_policy,
+                    memory_permissions,
                     has_managed_network_requirements,
                 ) {
                     get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)

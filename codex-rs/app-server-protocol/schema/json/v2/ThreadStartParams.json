@@ -294,6 +294,16 @@
             "fileSystem": {
               "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
             },
+            "memory": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PermissionProfileMemoryPermissions"
+                }
+              ],
+              "default": {
+                "isolated": true
+              }
+            },
             "network": {
               "$ref": "#/definitions/PermissionProfileNetworkPermissions"
             },
@@ -403,6 +413,17 @@
           "type": "object"
         }
       ]
+    },
+    "PermissionProfileMemoryPermissions": {
+      "properties": {
+        "isolated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "isolated"
+      ],
+      "type": "object"
     },
     "PermissionProfileNetworkPermissions": {
       "properties": {

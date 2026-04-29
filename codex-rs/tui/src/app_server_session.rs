@@ -1627,6 +1627,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            memory: Default::default(),
         };
 
         assert_eq!(
@@ -1657,6 +1658,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            memory: Default::default(),
         };
 
         assert_eq!(

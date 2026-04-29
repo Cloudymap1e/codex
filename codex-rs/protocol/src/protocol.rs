@@ -75,6 +75,7 @@ pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
+pub use crate::models::MemoryPermissions;
 pub use crate::permissions::FileSystemAccessMode;
 pub use crate::permissions::FileSystemPath;
 pub use crate::permissions::FileSystemSandboxEntry;

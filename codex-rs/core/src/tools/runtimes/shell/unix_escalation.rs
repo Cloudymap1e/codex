@@ -898,6 +898,7 @@ impl CoreShellCommandExecutor {
         let sandbox = sandbox_manager.select_initial(
             &file_system_sandbox_policy,
             network_sandbox_policy,
+            permission_profile.memory_permissions(),
             SandboxablePreference::Auto,
             self.windows_sandbox_level,
             self.network.is_some(),

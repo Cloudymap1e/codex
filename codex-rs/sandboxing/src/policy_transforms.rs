@@ -1,5 +1,6 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -499,18 +500,20 @@ pub fn effective_permission_profile(
         effective_file_system_sandbox_policy(&file_system_policy, additional_permissions);
     let effective_network_policy =
         effective_network_sandbox_policy(network_policy, additional_permissions);
-    PermissionProfile::from_runtime_permissions_with_enforcement(
-        permission_profile.enforcement(),
-        &effective_file_system_policy,
-        effective_network_policy,
-    )
+    permission_profile
+        .with_runtime_permissions(&effective_file_system_policy, effective_network_policy)
 }
 
 pub fn should_require_platform_sandbox(
     file_system_policy: &FileSystemSandboxPolicy,
     network_policy: NetworkSandboxPolicy,
+    memory_permissions: MemoryPermissions,
     has_managed_network_requirements: bool,
 ) -> bool {
+    if memory_permissions.is_isolated() {
+        return true;
+    }
+
     if has_managed_network_requirements {
         return true;
     }

@@ -40,6 +40,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileMemoryPermissions;
 use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -716,6 +717,7 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
             }],
             permission_profile: Some(PermissionProfile::Managed {
                 network: PermissionProfileNetworkPermissions { enabled: false },
+                memory: PermissionProfileMemoryPermissions::default(),
                 file_system: PermissionProfileFileSystemPermissions::Restricted {
                     entries: vec![FileSystemSandboxEntry {
                         path: FileSystemPath::Path {

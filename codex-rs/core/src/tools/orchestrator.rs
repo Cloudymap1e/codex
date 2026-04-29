@@ -219,6 +219,7 @@ impl ToolOrchestrator {
             SandboxOverride::NoOverride => self.sandbox.select_initial(
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
+                turn_ctx.permission_profile.memory_permissions(),
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 managed_network_active,

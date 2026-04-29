@@ -256,6 +256,7 @@ export type { PatchChangeKind } from "./PatchChangeKind";
 export type { PermissionGrantScope } from "./PermissionGrantScope";
 export type { PermissionProfile } from "./PermissionProfile";
 export type { PermissionProfileFileSystemPermissions } from "./PermissionProfileFileSystemPermissions";
+export type { PermissionProfileMemoryPermissions } from "./PermissionProfileMemoryPermissions";
 export type { PermissionProfileNetworkPermissions } from "./PermissionProfileNetworkPermissions";
 export type { PermissionsRequestApprovalParams } from "./PermissionsRequestApprovalParams";
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";

@@ -1329,6 +1329,7 @@ fn has_yolo_permissions(
                 | PermissionProfile::Managed {
                     file_system: ManagedFileSystemPermissions::Unrestricted,
                     network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+                    ..
                 }
         )
 }
@@ -4218,6 +4219,7 @@ mod tests {
         let permission_profile = PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: codex_protocol::protocol::NetworkSandboxPolicy::Enabled,
+            memory: Default::default(),
         };
 
         assert!(has_yolo_permissions(

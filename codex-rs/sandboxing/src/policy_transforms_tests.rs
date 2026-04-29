@@ -1,11 +1,15 @@
 use super::effective_file_system_sandbox_policy;
+use super::effective_permission_profile;
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
 use super::should_require_platform_sandbox;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -37,9 +41,30 @@ fn full_access_restricted_policy_skips_platform_sandbox_when_network_is_enabled(
         should_require_platform_sandbox(
             &policy,
             NetworkSandboxPolicy::Enabled,
+            MemoryPermissions::shared(),
             /*has_managed_network_requirements*/ false
         ),
         false
+    );
+}
+
+#[test]
+fn full_access_restricted_policy_uses_platform_sandbox_for_default_memory_isolation() {
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Write,
+    }]);
+
+    assert_eq!(
+        should_require_platform_sandbox(
+            &policy,
+            NetworkSandboxPolicy::Enabled,
+            MemoryPermissions::default(),
+            /*has_managed_network_requirements*/ false
+        ),
+        true
     );
 }
 
@@ -66,6 +91,7 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
         should_require_platform_sandbox(
             &policy,
             NetworkSandboxPolicy::Enabled,
+            MemoryPermissions::shared(),
             /*has_managed_network_requirements*/ false
         ),
         true
@@ -85,9 +111,30 @@ fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_netw
         should_require_platform_sandbox(
             &policy,
             NetworkSandboxPolicy::Restricted,
+            MemoryPermissions::shared(),
             /*has_managed_network_requirements*/ false
         ),
         true
+    );
+}
+
+#[test]
+fn effective_permission_profile_preserves_memory_permissions() {
+    let base = CorePermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+        network: NetworkSandboxPolicy::Enabled,
+        memory: MemoryPermissions::shared(),
+    };
+    let additional = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(false),
+        }),
+        file_system: None,
+    };
+
+    assert_eq!(
+        effective_permission_profile(&base, Some(&additional)).memory_permissions(),
+        MemoryPermissions::shared()
     );
 }
 

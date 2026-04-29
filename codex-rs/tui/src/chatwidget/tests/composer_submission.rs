@@ -110,6 +110,7 @@ async fn submission_includes_configured_permission_profile() {
             ],
             glob_scan_max_depth: None,
         },
+        memory: Default::default(),
     };
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
@@ -160,6 +161,7 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
     let expected_permission_profile = PermissionProfile::Managed {
         network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
         file_system: codex_protocol::models::ManagedFileSystemPermissions::Unrestricted,
+        memory: Default::default(),
     };
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,

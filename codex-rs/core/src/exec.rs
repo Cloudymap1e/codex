@@ -30,6 +30,7 @@ use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::models::MemoryPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -134,12 +135,14 @@ pub enum ExecCapturePolicy {
 fn select_process_exec_tool_sandbox_type(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    memory_permissions: MemoryPermissions,
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     enforce_managed_network: bool,
 ) -> SandboxType {
     SandboxManager::new().select_initial(
         file_system_sandbox_policy,
         network_sandbox_policy,
+        memory_permissions,
         SandboxablePreference::Auto,
         windows_sandbox_level,
         enforce_managed_network,
@@ -339,9 +342,11 @@ pub fn build_exec_request(
     let enforce_managed_network = network.is_some();
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
+    let memory_permissions = permission_profile.memory_permissions();
     let sandbox_type = select_process_exec_tool_sandbox_type(
         &file_system_sandbox_policy,
         network_sandbox_policy,
+        memory_permissions,
         windows_sandbox_level,
         enforce_managed_network,
     );

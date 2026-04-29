@@ -943,6 +943,7 @@ async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Restricted,
+        memory: Default::default(),
     };
 
     let config = Config::load_from_base_config_with_overrides(
@@ -974,6 +975,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        memory: Default::default(),
     };
 
     let mut config = Config::load_from_base_config_with_overrides(

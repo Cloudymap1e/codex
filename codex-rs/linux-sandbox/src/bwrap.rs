@@ -8,7 +8,7 @@
 //!
 //! The overall Linux sandbox is composed of:
 //! - seccomp + `PR_SET_NO_NEW_PRIVS` applied in-process, and
-//! - bubblewrap used to construct the filesystem view before exec.
+//! - bubblewrap used to construct namespaces and the filesystem view before exec.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
@@ -28,6 +28,7 @@ use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
+use codex_protocol::protocol::MemoryPermissions;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
@@ -67,6 +68,7 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
+    pub memory_permissions: MemoryPermissions,
 }
 
 impl Default for BwrapOptions {
@@ -75,6 +77,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
+            memory_permissions: MemoryPermissions::default(),
         }
     }
 }
@@ -125,7 +128,9 @@ pub(crate) fn create_bwrap_command_args(
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
     if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
-        return if options.network_mode == BwrapNetworkMode::FullAccess {
+        return if options.network_mode == BwrapNetworkMode::FullAccess
+            && !options.memory_permissions.is_isolated()
+        {
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
@@ -156,6 +161,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
     ];
+    push_unshare_ipc_arg(&mut args, options.memory_permissions);
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -198,6 +204,7 @@ fn create_bwrap_flags(
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
     args.push("--unshare-pid".to_string());
+    push_unshare_ipc_arg(&mut args, options.memory_permissions);
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -220,6 +227,12 @@ fn create_bwrap_flags(
         args,
         preserved_files,
     })
+}
+
+fn push_unshare_ipc_arg(args: &mut Vec<String>, memory_permissions: MemoryPermissions) {
+    if memory_permissions.is_isolated() {
+        args.push("--unshare-ipc".to_string());
+    }
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.
@@ -1036,6 +1049,7 @@ mod tests {
     use codex_protocol::protocol::FileSystemSandboxEntry;
     use codex_protocol::protocol::FileSystemSandboxPolicy;
     use codex_protocol::protocol::FileSystemSpecialPath;
+    use codex_protocol::protocol::MemoryPermissions;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -1061,10 +1075,30 @@ mod tests {
     }
 
     #[test]
-    fn full_disk_write_full_network_returns_unwrapped_command() {
+    fn full_disk_write_full_network_shared_memory_returns_unwrapped_command() {
         let command = vec!["/bin/true".to_string()];
         let args = create_bwrap_command_args(
             command.clone(),
+            &FileSystemSandboxPolicy::unrestricted(),
+            Path::new("/"),
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+                memory_permissions: MemoryPermissions::shared(),
+                ..Default::default()
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_eq!(args.args, command);
+    }
+
+    #[test]
+    fn full_disk_write_full_network_isolated_memory_still_unshares_ipc() {
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command,
             &FileSystemSandboxPolicy::unrestricted(),
             Path::new("/"),
             Path::new("/"),
@@ -1076,7 +1110,23 @@ mod tests {
         )
         .expect("create bwrap args");
 
-        assert_eq!(args.args, command);
+        assert_eq!(
+            args.args,
+            vec![
+                "--new-session".to_string(),
+                "--die-with-parent".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--unshare-user".to_string(),
+                "--unshare-pid".to_string(),
+                "--unshare-ipc".to_string(),
+                "--proc".to_string(),
+                "/proc".to_string(),
+                "--".to_string(),
+                "/bin/true".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1105,6 +1155,7 @@ mod tests {
                 "/".to_string(),
                 "--unshare-user".to_string(),
                 "--unshare-pid".to_string(),
+                "--unshare-ipc".to_string(),
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),

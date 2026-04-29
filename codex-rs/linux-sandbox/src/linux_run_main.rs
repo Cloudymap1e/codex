@@ -17,6 +17,7 @@ use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::MemoryPermissions;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
@@ -114,6 +115,7 @@ pub fn run_main() -> ! {
         permission_profile,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        memory_permissions,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
     ensure_legacy_landlock_mode_supports_policy(
         use_legacy_landlock,
@@ -146,7 +148,10 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
+    if file_system_sandbox_policy.has_full_disk_write_access()
+        && !allow_network_for_proxy
+        && !memory_permissions.is_isolated()
+    {
         if let Err(e) = apply_permission_profile_to_current_thread(
             &permission_profile,
             &sandbox_policy_cwd,
@@ -179,14 +184,18 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        let options = BwrapOptions {
+            mount_proc: !no_proc,
+            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            memory_permissions,
+            ..Default::default()
+        };
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            network_sandbox_policy,
             inner,
-            !no_proc,
-            allow_network_for_proxy,
+            options,
         );
     }
 
@@ -208,6 +217,7 @@ struct EffectivePermissions {
     permission_profile: PermissionProfile,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    memory_permissions: MemoryPermissions,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -234,10 +244,12 @@ fn resolve_permission_profile(
         permission_profile.ok_or(ResolvePermissionProfileError::MissingConfiguration)?;
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
+    let memory_permissions = permission_profile.memory_permissions();
     Ok(EffectivePermissions {
         permission_profile,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        memory_permissions,
     })
 }
 
@@ -267,33 +279,24 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
-    mount_proc: bool,
-    allow_network_for_proxy: bool,
+    mut options: BwrapOptions,
 ) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
-    let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
-    if mount_proc
+    if options.mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
             command_cwd,
             file_system_sandbox_policy,
-            network_mode,
+            options.network_mode,
+            options.memory_permissions,
         )
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
-        mount_proc = false;
+        options.mount_proc = false;
     }
-
-    let options = BwrapOptions {
-        mount_proc,
-        network_mode,
-        ..Default::default()
-    };
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
@@ -387,12 +390,14 @@ fn preflight_proc_mount_support(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    memory_permissions: MemoryPermissions,
 ) -> bool {
     let preflight_argv = build_preflight_bwrap_argv(
         sandbox_policy_cwd,
         command_cwd,
         file_system_sandbox_policy,
         network_mode,
+        memory_permissions,
     );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
@@ -403,6 +408,7 @@ fn build_preflight_bwrap_argv(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    memory_permissions: MemoryPermissions,
 ) -> crate::bwrap::BwrapArgs {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
@@ -413,6 +419,7 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
+            memory_permissions,
             ..Default::default()
         },
     )

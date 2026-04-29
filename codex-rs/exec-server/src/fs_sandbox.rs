@@ -81,6 +81,7 @@ impl FileSystemSandboxRunner {
         let sandbox = sandbox_manager.select_initial(
             &file_system_policy,
             network_policy,
+            permission_profile.memory_permissions(),
             SandboxablePreference::Auto,
             sandbox_context.windows_sandbox_level,
             /*has_managed_network_requirements*/ false,
