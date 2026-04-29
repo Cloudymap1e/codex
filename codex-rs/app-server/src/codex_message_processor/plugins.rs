@@ -500,6 +500,12 @@ impl CodexMessageProcessor {
                 "remote plugin {plugin_name} is not available for install"
             )));
         }
+        let _remote_plugin_cache_mutation =
+            codex_core_plugins::remote::mark_remote_plugin_cache_mutation_in_flight(
+                config.codex_home.as_path(),
+                &remote_marketplace_name,
+                &remote_detail.summary.name,
+            );
         let validated_bundle = codex_core_plugins::remote_bundle::validate_remote_plugin_bundle(
             &plugin_name,
             &remote_marketplace_name,
