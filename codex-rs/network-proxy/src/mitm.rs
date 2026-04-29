@@ -56,6 +56,11 @@ pub struct MitmState {
     max_body_bytes: usize,
 }
 
+pub(crate) struct MitmUpstreamConfig {
+    pub(crate) allow_upstream_proxy: bool,
+    pub(crate) allow_local_binding: bool,
+}
+
 #[derive(Clone)]
 struct MitmPolicyContext {
     target_host: String,
@@ -91,17 +96,17 @@ impl std::fmt::Debug for MitmState {
 }
 
 impl MitmState {
-    pub(crate) fn new(allow_upstream_proxy: bool) -> Result<Self> {
+    pub(crate) fn new(config: MitmUpstreamConfig) -> Result<Self> {
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
         // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
         let ca = ManagedMitmCa::load_or_create()?;
 
-        let upstream = if allow_upstream_proxy {
-            UpstreamClient::from_env_proxy()
+        let upstream = if config.allow_upstream_proxy {
+            UpstreamClient::from_env_proxy_with_allow_local_binding(config.allow_local_binding)
         } else {
-            UpstreamClient::direct()
+            UpstreamClient::direct_with_allow_local_binding(config.allow_local_binding)
         };
 
         Ok(Self {

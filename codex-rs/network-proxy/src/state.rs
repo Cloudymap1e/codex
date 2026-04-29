@@ -3,6 +3,7 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::NetworkUnixSocketPermissions;
 use crate::mitm::MitmState;
+use crate::mitm::MitmUpstreamConfig;
 use crate::mitm_hook::MitmHookConfig;
 use crate::mitm_hook::compile_mitm_hooks;
 use crate::mitm_hook::validate_mitm_hook_config;
@@ -73,9 +74,10 @@ pub fn build_config_state(
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
     let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.network.mitm {
-        Some(Arc::new(MitmState::new(
-            config.network.allow_upstream_proxy,
-        )?))
+        Some(Arc::new(MitmState::new(MitmUpstreamConfig {
+            allow_upstream_proxy: config.network.allow_upstream_proxy,
+            allow_local_binding: config.network.allow_local_binding,
+        })?))
     } else {
         None
     };
