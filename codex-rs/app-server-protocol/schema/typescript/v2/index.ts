@@ -280,6 +280,8 @@ export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";
 export type { PluginReadParams } from "./PluginReadParams";
 export type { PluginReadResponse } from "./PluginReadResponse";
+export type { PluginSkillReadParams } from "./PluginSkillReadParams";
+export type { PluginSkillReadResponse } from "./PluginSkillReadResponse";
 export type { PluginSource } from "./PluginSource";
 export type { PluginSummary } from "./PluginSummary";
 export type { PluginUninstallParams } from "./PluginUninstallParams";
