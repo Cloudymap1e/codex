@@ -2,6 +2,8 @@ use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_core_plugins::remote::is_valid_remote_plugin_id;
+use codex_core_plugins::remote::validate_remote_plugin_id;
 
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
@@ -452,11 +454,7 @@ impl CodexMessageProcessor {
                 "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
             )));
         }
-        if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
-            return Err(invalid_request(
-                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-            ));
-        }
+        validate_remote_plugin_id(&plugin_name)?;
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -715,11 +713,7 @@ impl CodexMessageProcessor {
         {
             return Err(invalid_request("remote plugin uninstall is not enabled"));
         }
-        if plugin_id.is_empty() || !is_valid_remote_plugin_id(&plugin_id) {
-            return Err(invalid_request(
-                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-            ));
-        }
+        validate_remote_plugin_id(&plugin_id)?;
 
         let auth = self.auth_manager.auth().await;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -755,15 +749,8 @@ impl CodexMessageProcessor {
     }
 }
 
-fn is_valid_remote_plugin_id(plugin_name: &str) -> bool {
-    plugin_name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
-}
-
 fn is_valid_remote_uninstall_plugin_id(plugin_name: &str) -> bool {
-    !plugin_name.is_empty()
-        && is_valid_remote_plugin_id(plugin_name)
+    is_valid_remote_plugin_id(plugin_name)
         && (plugin_name.starts_with("plugins~")
             || plugin_name.starts_with("app_")
             || plugin_name.starts_with("asdk_app_")
@@ -864,20 +851,6 @@ fn remote_plugin_catalog_error_to_jsonrpc(
             data: None,
         },
     }
-}
-
-fn validate_remote_plugin_id(plugin_id: &str) -> Result<(), JSONRPCErrorError> {
-    if plugin_id.is_empty()
-        || !plugin_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
-    {
-        return Err(invalid_request(
-            "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
-        ));
-    }
-
-    Ok(())
 }
 
 fn remote_plugin_bundle_install_error_to_jsonrpc(
