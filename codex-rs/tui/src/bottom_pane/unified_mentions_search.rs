@@ -368,9 +368,9 @@ mod tests {
             tool_candidate("Alpha Skill", MentionType::Skill),
         ];
         let file_matches = vec![
-            file_match("src/alpha.rs", MatchType::File, 1),
-            file_match("src/bin", MatchType::Directory, 7),
-            file_match("src/zeta.rs", MatchType::File, 9),
+            file_match("src/alpha.rs", MatchType::File, /*score*/ 1),
+            file_match("src/bin", MatchType::Directory, /*score*/ 7),
+            file_match("src/zeta.rs", MatchType::File, /*score*/ 9),
         ];
 
         let rows = filtered_candidates(
@@ -404,8 +404,8 @@ mod tests {
             tool_candidate("Alpha Skill", MentionType::Skill),
         ];
         let file_matches = vec![
-            file_match("src/main.rs", MatchType::File, 5),
-            file_match("src/bin", MatchType::Directory, 4),
+            file_match("src/main.rs", MatchType::File, /*score*/ 5),
+            file_match("src/bin", MatchType::Directory, /*score*/ 4),
         ];
 
         let all_results: Vec<MentionType> = filtered_candidates(

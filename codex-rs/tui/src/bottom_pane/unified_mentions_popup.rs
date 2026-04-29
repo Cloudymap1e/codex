@@ -215,7 +215,7 @@ mod tests {
     fn unified_mentions_query_change_keeps_previous_file_selection_while_waiting_for_new_results() {
         let mut popup = UnifiedMentionsPopup::new(Vec::new());
         popup.set_query("ma");
-        popup.set_file_matches("ma", vec![file_match(1)]);
+        popup.set_file_matches("ma", vec![file_match(/*index*/ 1)]);
 
         match popup.selected() {
             Some(Selection::File(path)) => {
@@ -244,7 +244,7 @@ mod tests {
         let mut popup = UnifiedMentionsPopup::new(Vec::new());
         popup.set_query("ma");
         popup.set_query("main");
-        popup.set_file_matches("ma", vec![file_match(1)]);
+        popup.set_file_matches("ma", vec![file_match(/*index*/ 1)]);
 
         assert!(popup.rows().is_empty());
         assert!(popup.selected().is_none());

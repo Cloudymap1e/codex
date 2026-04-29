@@ -212,7 +212,7 @@ fn primary_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
         } else {
             base_style
         };
-        return styled_text_spans(file_name, style, None);
+        return styled_text_spans(file_name, style, /*match_indices*/ None);
     }
 
     let name_style = match row.mention_type {
@@ -251,7 +251,7 @@ fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
     let file_name_start = file_name_start(row);
     let path_style = base_style.dim();
     if file_name_start == 0 {
-        return styled_text_spans(CURRENT_DIR_PREFIX, path_style, None);
+        return styled_text_spans(CURRENT_DIR_PREFIX, path_style, /*match_indices*/ None);
     }
     if file_name_start != usize::MAX {
         let byte_start = row
@@ -267,7 +267,7 @@ fn path_spans(row: &SearchResult, base_style: Style) -> Vec<Span<'static>> {
         );
     }
 
-    styled_text_spans(&row.display_name, base_style, None)
+    styled_text_spans(&row.display_name, base_style, /*match_indices*/ None)
 }
 
 fn primary_text_width(row: &SearchResult) -> usize {
