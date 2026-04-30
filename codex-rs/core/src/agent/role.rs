@@ -73,14 +73,34 @@ async fn apply_role_to_config_inner(
     }
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
+    let model_preservation = model_preservation_policy(config, &role_layer_toml);
+    // Role reload reconstructs Config from persisted layers; keep runtime-selected model settings
+    // unless the role explicitly takes ownership of that part of model selection.
+    let current_model = config.model.clone();
+    let current_model_reasoning_effort = config.model_reasoning_effort;
+    let current_model_reasoning_summary = config.model_reasoning_summary;
+    let current_model_verbosity = config.model_verbosity;
 
-    *config = reload::build_next_config(
+    let mut next_config = reload::build_next_config(
         config,
         role_layer_toml,
         preserve_current_profile,
         preserve_current_provider,
     )
     .await?;
+    if model_preservation.model {
+        next_config.model = current_model;
+    }
+    if model_preservation.reasoning_effort {
+        next_config.model_reasoning_effort = current_model_reasoning_effort;
+    }
+    if model_preservation.reasoning_summary {
+        next_config.model_reasoning_summary = current_model_reasoning_summary;
+    }
+    if model_preservation.verbosity {
+        next_config.model_verbosity = current_model_verbosity;
+    }
+    *config = next_config;
     Ok(())
 }
 
@@ -131,7 +151,53 @@ pub(crate) fn resolve_role_config<'a>(
 fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, bool) {
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
-    let role_updates_active_profile_provider = config
+    let role_updates_active_profile_provider =
+        role_updates_active_profile_key(config, role_layer_toml, "model_provider");
+    let preserve_current_profile = !role_selects_provider && !role_selects_profile;
+    let preserve_current_provider =
+        preserve_current_profile && !role_updates_active_profile_provider;
+    (preserve_current_profile, preserve_current_provider)
+}
+
+#[derive(Clone, Copy)]
+struct ModelPreservationPolicy {
+    model: bool,
+    reasoning_effort: bool,
+    reasoning_summary: bool,
+    verbosity: bool,
+}
+
+fn model_preservation_policy(
+    config: &Config,
+    role_layer_toml: &TomlValue,
+) -> ModelPreservationPolicy {
+    let role_selects_profile = role_layer_toml.get("profile").is_some();
+    let role_updates_active_profile_model =
+        role_updates_active_profile_key(config, role_layer_toml, "model");
+    let role_replaces_model_context = role_selects_profile
+        || role_layer_toml.get("model").is_some()
+        || role_updates_active_profile_model;
+
+    ModelPreservationPolicy {
+        model: !role_replaces_model_context,
+        reasoning_effort: !role_replaces_model_context
+            && role_layer_toml.get("model_reasoning_effort").is_none()
+            && !role_updates_active_profile_key(config, role_layer_toml, "model_reasoning_effort"),
+        reasoning_summary: !role_replaces_model_context
+            && role_layer_toml.get("model_reasoning_summary").is_none()
+            && !role_updates_active_profile_key(config, role_layer_toml, "model_reasoning_summary"),
+        verbosity: !role_replaces_model_context
+            && role_layer_toml.get("model_verbosity").is_none()
+            && !role_updates_active_profile_key(config, role_layer_toml, "model_verbosity"),
+    }
+}
+
+fn role_updates_active_profile_key(
+    config: &Config,
+    role_layer_toml: &TomlValue,
+    key: &str,
+) -> bool {
+    config
         .active_profile
         .as_ref()
         .and_then(|active_profile| {
@@ -140,13 +206,9 @@ fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, b
                 .and_then(TomlValue::as_table)
                 .and_then(|profiles| profiles.get(active_profile))
                 .and_then(TomlValue::as_table)
-                .map(|profile| profile.contains_key("model_provider"))
+                .map(|profile| profile.contains_key(key))
         })
-        .unwrap_or(false);
-    let preserve_current_profile = !role_selects_provider && !role_selects_profile;
-    let preserve_current_provider =
-        preserve_current_profile && !role_updates_active_profile_provider;
-    (preserve_current_profile, preserve_current_provider)
+        .unwrap_or(false)
 }
 
 mod reload {

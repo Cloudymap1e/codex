@@ -130,6 +130,34 @@ model_reasoning_effort = "minimal"
     role_name
 }
 
+async fn install_role_without_model_override(turn: &mut TurnContext) -> String {
+    let role_name = "non-model-role".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("non-model-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"developer_instructions = "Stay focused"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role without model overrides".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
+}
+
 fn expect_text_output<T>(output: T) -> (String, Option<bool>)
 where
     T: ToolOutput,
@@ -166,6 +194,99 @@ struct ListedAgentResult {
     agent_name: String,
     agent_status: serde_json::Value,
     last_task_message: Option<String>,
+}
+
+#[tokio::test]
+async fn spawn_agent_preserves_requested_model_when_role_reloads_without_model() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_without_model_override(&mut turn).await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "model": "gpt-5.2"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let agent_id = parse_agent_id(
+        result["agent_id"]
+            .as_str()
+            .expect("spawned agent id should be returned"),
+    );
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.2");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_agent_preserves_requested_model_when_role_reloads_without_model() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_without_model_override(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(
+            (*turn.config).clone(),
+            thread_store_from_config(turn.config.as_ref()),
+        )
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        config: Arc::new(config),
+        ..turn
+    };
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "requested_model",
+                "agent_type": role_name,
+                "model": "gpt-5.2",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.2");
 }
 
 #[tokio::test]
