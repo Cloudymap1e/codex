@@ -1,5 +1,8 @@
+pub mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
+pub mod manager;
+pub(crate) mod manager_startup_sync;
 pub mod manifest;
 pub mod marketplace;
 pub mod marketplace_add;
@@ -8,9 +11,20 @@ pub mod marketplace_upgrade;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
+pub mod render;
 pub mod startup_sync;
 pub mod store;
 pub mod toggles;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
+
+pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::types::McpServerConfig>;
+pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::types::McpServerConfig>;
+pub use codex_plugin::AppConnectorId;
+pub use codex_plugin::EffectiveSkillRoots;
+pub use codex_plugin::PluginCapabilitySummary;
+pub use codex_plugin::PluginId;
+pub use codex_plugin::PluginIdError;
+pub use codex_plugin::PluginTelemetryMetadata;
+pub use codex_plugin::validate_plugin_segment;
