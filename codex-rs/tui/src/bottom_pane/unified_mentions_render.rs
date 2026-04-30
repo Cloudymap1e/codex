@@ -27,6 +27,7 @@ const CONTENT_TAG_GAP: usize = 2;
 const FOOTER_SECTION_GAP: &str = "  ";
 const CURRENT_DIR_PREFIX: &str = "./";
 const FOOTER_INSERT_KEY: KeyCode = KeyCode::Enter;
+const FOOTER_INSERT_ALTERNATE_KEY: KeyCode = KeyCode::Tab;
 const FOOTER_CLOSE_KEY: KeyCode = KeyCode::Esc;
 const FOOTER_PREVIOUS_MODE_KEY: KeyCode = KeyCode::Left;
 const FOOTER_NEXT_MODE_KEY: KeyCode = KeyCode::Right;
@@ -359,6 +360,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, search_mode: SearchMode) {
 fn footer_hint_line() -> Line<'static> {
     Line::from(vec![
         key_hint::plain(FOOTER_INSERT_KEY).into(),
+        "/".dim(),
+        key_hint::plain(FOOTER_INSERT_ALTERNATE_KEY).into(),
         " insert · ".dim(),
         key_hint::plain(FOOTER_CLOSE_KEY).into(),
         " close · ".dim(),

@@ -13,4 +13,4 @@ expression: "render_popup_text(\"@calendar\", &rows, state, 86, SearchMode::Tool
 
 
 
-  enter insert · esc close · ←/→ switch s…  All Results    Filesystem Only   [Plugins]
+  enter/tab insert · esc close · ←/→ swit…  All Results    Filesystem Only   [Plugins]

@@ -13,4 +13,4 @@ expression: "render_popup_text(\"@file\", &rows, state, 72, SearchMode::Results)
   file_08.rs  src/results/                                        File
   file_09.rs  src/results/                                        File
 
-  enter insert · esc close … [All Results]   Filesystem Only    Plugins
+  enter/tab insert · esc cl… [All Results]   Filesystem Only    Plugins
