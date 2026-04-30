@@ -184,3 +184,47 @@ fn serialize_environment_context_with_subagents() {
 
     assert_eq!(context.render(), expected);
 }
+
+#[test]
+fn serialize_environment_context_with_multiple_selected_environments() {
+    let mut context = EnvironmentContext::new(
+        Some(test_path_buf("/primary")),
+        fake_shell_name(),
+        Some("2026-02-26".to_string()),
+        Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+    context.environments = vec![
+        EnvironmentContextEnvironment {
+            id: "local".to_string(),
+            cwd: test_path_buf("/primary"),
+            primary: true,
+        },
+        EnvironmentContextEnvironment {
+            id: "remote".to_string(),
+            cwd: test_path_buf("/remote/repo"),
+            primary: false,
+        },
+    ];
+
+    let expected = format!(
+        r#"<environment_context>
+  <environments>
+    <environment id="local" primary="true">
+      <cwd>{}</cwd>
+    </environment>
+    <environment id="remote" primary="false">
+      <cwd>{}</cwd>
+    </environment>
+  </environments>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#,
+        test_path_buf("/primary").display(),
+        test_path_buf("/remote/repo").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
