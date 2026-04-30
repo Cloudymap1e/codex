@@ -889,10 +889,20 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             summary_text: summary.clone(),
             raw_content: content.clone(),
         })),
-        ThreadItem::WebSearch { id, query, action } => Some(TurnItem::WebSearch(WebSearchItem {
+        ThreadItem::WebSearch {
+            id,
+            query,
+            action,
+            started_at_ms,
+            completed_at_ms,
+            duration_ms,
+        } => Some(TurnItem::WebSearch(WebSearchItem {
             id: id.clone(),
             query: query.clone(),
             action: app_server_web_search_action_to_core(action.clone()?)?,
+            started_at_ms: *started_at_ms,
+            completed_at_ms: *completed_at_ms,
+            duration_ms: *duration_ms,
         })),
         ThreadItem::ImageGeneration {
             id,
@@ -900,12 +910,18 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             revised_prompt,
             result,
             saved_path,
+            started_at_ms,
+            completed_at_ms,
+            duration_ms,
         } => Some(TurnItem::ImageGeneration(ImageGenerationItem {
             id: id.clone(),
             status: status.clone(),
             revised_prompt: revised_prompt.clone(),
             result: result.clone(),
             saved_path: saved_path.clone(),
+            started_at_ms: *started_at_ms,
+            completed_at_ms: *completed_at_ms,
+            duration_ms: *duration_ms,
         })),
         ThreadItem::ContextCompaction { id } => {
             Some(TurnItem::ContextCompaction(ContextCompactionItem {
@@ -957,6 +973,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
                 .collect(),
             source: source.to_core(),
             interaction_input: None,
+            started_at_ms: None,
         }),
     }])
 }
@@ -974,6 +991,8 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
         aggregated_output,
         exit_code,
         duration_ms,
+        started_at_ms,
+        completed_at_ms,
     } = item
     else {
         return None;
@@ -1017,6 +1036,8 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
                 .collect(),
             source: source.to_core(),
             interaction_input: None,
+            started_at_ms: *started_at_ms,
+            completed_at_ms: *completed_at_ms,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: aggregated_output.clone(),
@@ -1211,6 +1232,8 @@ mod tests {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            started_at_ms: None,
+            completed_at_ms: None,
         };
 
         let (_, started_events) = server_notification_thread_events(
@@ -1267,6 +1290,8 @@ mod tests {
             aggregated_output: Some("hello world\n".to_string()),
             exit_code: Some(0),
             duration_ms: Some(5),
+            started_at_ms: None,
+            completed_at_ms: None,
         };
         let (_, completed_events) = server_notification_thread_events(
             ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -1302,6 +1327,8 @@ mod tests {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            started_at_ms: None,
+            completed_at_ms: None,
         };
 
         let events =
@@ -1352,6 +1379,8 @@ mod tests {
                     aggregated_output: Some("hello world\n".to_string()),
                     exit_code: Some(0),
                     duration_ms: Some(5),
+                    started_at_ms: None,
+                    completed_at_ms: None,
                 }],
                 status: TurnStatus::Completed,
                 error: None,
@@ -1606,6 +1635,9 @@ mod tests {
                         id: "search-1".to_string(),
                         query: "ratatui stylize".to_string(),
                         action: Some(codex_app_server_protocol::WebSearchAction::Other),
+                        started_at_ms: None,
+                        completed_at_ms: None,
+                        duration_ms: None,
                     },
                     ThreadItem::ImageGeneration {
                         id: "image-1".to_string(),
@@ -1613,6 +1645,9 @@ mod tests {
                         revised_prompt: Some("diagram".to_string()),
                         result: "image.png".to_string(),
                         saved_path: None,
+                        started_at_ms: None,
+                        completed_at_ms: None,
+                        duration_ms: None,
                     },
                     ThreadItem::ContextCompaction {
                         id: "compact-1".to_string(),

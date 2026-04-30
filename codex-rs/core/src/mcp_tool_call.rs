@@ -33,6 +33,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -184,6 +185,7 @@ pub(crate) async fn handle_mcp_tool_call(
         call_id: call_id.clone(),
         invocation: invocation.clone(),
         mcp_app_resource_uri: mcp_app_resource_uri.clone(),
+        started_at_ms: None,
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
@@ -312,6 +314,7 @@ async fn handle_approved_mcp_tool_call(
         .map(str::to_string);
 
     let start = Instant::now();
+    let started_at_ms = now_unix_timestamp_ms();
     let rewrite = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
@@ -356,10 +359,13 @@ async fn handle_approved_mcp_tool_call(
         tracing::warn!("MCP tool call error: {error:?}");
     }
     let duration = start.elapsed();
+    let completed_at_ms = now_unix_timestamp_ms();
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),
         invocation,
         mcp_app_resource_uri,
+        started_at_ms: Some(started_at_ms),
+        completed_at_ms: Some(completed_at_ms),
         duration,
         result: result.clone(),
     });
@@ -1849,6 +1855,7 @@ async fn notify_mcp_tool_call_skip(
             call_id: call_id.to_string(),
             invocation: invocation.clone(),
             mcp_app_resource_uri: mcp_app_resource_uri.clone(),
+            started_at_ms: None,
         });
         notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
     }
@@ -1859,6 +1866,8 @@ async fn notify_mcp_tool_call_skip(
         mcp_app_resource_uri,
         duration: Duration::ZERO,
         result: Err(message.clone()),
+        started_at_ms: None,
+        completed_at_ms: None,
     });
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event).await;
     Err(message)

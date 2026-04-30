@@ -369,6 +369,8 @@ async fn exec_end_without_begin_uses_event_command() {
             parsed_cmd,
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             stdout: "done".to_string(),
             stderr: String::new(),
             aggregated_output: "done".to_string(),
@@ -954,6 +956,9 @@ async fn image_generation_call_adds_history_cell() {
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
             saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         }),
     });
 
@@ -1539,6 +1544,7 @@ async fn apply_patch_events_emit_history_cells() {
         turn_id: "turn-c1".into(),
         auto_approved: true,
         changes: changes2,
+        started_at_ms: None,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -1568,6 +1574,9 @@ async fn apply_patch_events_emit_history_cells() {
         success: true,
         changes: end_changes,
         status: CorePatchApplyStatus::Completed,
+        started_at_ms: None,
+        completed_at_ms: None,
+        duration_ms: None,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -1617,6 +1626,7 @@ async fn apply_patch_manual_approval_adjusts_header() {
             turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
+            started_at_ms: None,
         }),
     });
 
@@ -1670,6 +1680,7 @@ async fn apply_patch_manual_flow_snapshot() {
             turn_id: "turn-c1".into(),
             auto_approved: false,
             changes: apply_changes,
+            started_at_ms: None,
         }),
     });
     let approved_lines = drain_insert_history(&mut rx)
@@ -1783,6 +1794,7 @@ async fn apply_patch_full_flow_integration_like() {
             turn_id: "turn-call-1".into(),
             auto_approved: false,
             changes: changes2,
+            started_at_ms: None,
         }),
     });
     let mut end_changes = HashMap::new();
@@ -1800,6 +1812,9 @@ async fn apply_patch_full_flow_integration_like() {
             success: true,
             changes: end_changes,
             status: CorePatchApplyStatus::Completed,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         }),
     });
 }

@@ -192,6 +192,7 @@ mod tests {
             parsed_cmd: Vec::new(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            started_at_ms: None,
         }
     }
 

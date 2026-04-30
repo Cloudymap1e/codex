@@ -388,6 +388,9 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: String::new(),
             action: None,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -397,6 +400,9 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: payload.query.clone(),
             action: Some(WebSearchAction::from(payload.action.clone())),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -474,6 +480,8 @@ impl ThreadHistoryBuilder {
             status: DynamicToolCallStatus::InProgress,
             content_items: None,
             success: None,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
             duration_ms: None,
         };
         if payload.turn_id.is_empty() {
@@ -498,6 +506,8 @@ impl ThreadHistoryBuilder {
             status,
             content_items: Some(convert_dynamic_tool_content_items(&payload.content_items)),
             success: Some(payload.success),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
             duration_ms,
         };
         if payload.turn_id.is_empty() {
@@ -521,6 +531,8 @@ impl ThreadHistoryBuilder {
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             result: None,
             error: None,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
             duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
@@ -562,6 +574,8 @@ impl ThreadHistoryBuilder {
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
             result,
             error,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
             duration_ms,
         };
         self.upsert_item_in_current_turn(item);
@@ -582,6 +596,9 @@ impl ThreadHistoryBuilder {
             revised_prompt: None,
             result: String::new(),
             saved_path: None,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -593,6 +610,9 @@ impl ThreadHistoryBuilder {
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
             saved_path: payload.saved_path.clone(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -611,6 +631,9 @@ impl ThreadHistoryBuilder {
             model: Some(payload.model.clone()),
             reasoning_effort: Some(payload.reasoning_effort),
             agents_states: HashMap::new(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -646,6 +669,9 @@ impl ThreadHistoryBuilder {
             model: Some(payload.model.clone()),
             reasoning_effort: Some(payload.reasoning_effort),
             agents_states,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         });
     }
 
@@ -663,6 +689,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -687,6 +716,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states: [(receiver_id, received_status)].into_iter().collect(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         });
     }
 
@@ -708,6 +740,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -743,6 +778,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         });
     }
 
@@ -760,6 +798,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -786,6 +827,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         });
     }
 
@@ -803,6 +847,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -832,6 +879,9 @@ impl ThreadHistoryBuilder {
             model: None,
             reasoning_effort: None,
             agents_states,
+            started_at_ms: payload.started_at_ms,
+            completed_at_ms: payload.completed_at_ms,
+            duration_ms: payload.duration_ms,
         });
     }
 
@@ -1426,6 +1476,9 @@ mod tests {
                 revised_prompt: Some("final prompt".into()),
                 result: "Zm9v".into(),
                 saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-image".into(),
@@ -1461,6 +1514,9 @@ mod tests {
                         revised_prompt: Some("final prompt".into()),
                         result: "Zm9v".into(),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
+                        started_at_ms: None,
+                        completed_at_ms: None,
+                        duration_ms: None,
                     },
                 ],
             }
@@ -1810,6 +1866,9 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 },
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-1".into(),
@@ -1829,6 +1888,8 @@ mod tests {
                 duration: Duration::from_millis(12),
                 formatted_output: String::new(),
                 status: CoreExecCommandStatus::Completed,
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: "mcp-1".into(),
@@ -1840,6 +1901,8 @@ mod tests {
                 mcp_app_resource_uri: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
         ];
 
@@ -1859,6 +1922,9 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 }),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
         assert_eq!(
@@ -1875,6 +1941,8 @@ mod tests {
                 }],
                 aggregated_output: Some("hello world\n".into()),
                 exit_code: Some(0),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(12),
             }
         );
@@ -1891,6 +1959,8 @@ mod tests {
                 error: Some(McpToolCallError {
                     message: "boom".into(),
                 }),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(8),
             }
         );
@@ -1925,6 +1995,8 @@ mod tests {
                         "ui/resourceUri": "ui://widget/lookup.html"
                     })),
                 }),
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
         ];
 
@@ -1954,6 +2026,8 @@ mod tests {
                     })),
                 })),
                 error: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(8),
             }
         );
@@ -1981,6 +2055,7 @@ mod tests {
                     namespace: Some("codex_app".into()),
                     tool: "lookup_ticket".into(),
                     arguments: serde_json::json!({"id":"ABC-123"}),
+                    started_at_ms: None,
                 },
             ),
             EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
@@ -1995,6 +2070,8 @@ mod tests {
                 success: true,
                 error: None,
                 duration: Duration::from_millis(42),
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
         ];
 
@@ -2017,6 +2094,8 @@ mod tests {
                     text: "Ticket is open".into(),
                 }]),
                 success: Some(true),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(42),
             }
         );
@@ -2053,6 +2132,8 @@ mod tests {
                 duration: Duration::ZERO,
                 formatted_output: String::new(),
                 status: CoreExecCommandStatus::Declined,
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: "patch-declined".into(),
@@ -2069,6 +2150,9 @@ mod tests {
                 .into_iter()
                 .collect(),
                 status: CorePatchApplyStatus::Declined,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2093,6 +2177,8 @@ mod tests {
                 }],
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(0),
             }
         );
@@ -2106,6 +2192,9 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
     }
@@ -2184,6 +2273,8 @@ mod tests {
                 }],
                 aggregated_output: None,
                 exit_code: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             }
         );
@@ -2245,6 +2336,8 @@ mod tests {
                 }],
                 aggregated_output: None,
                 exit_code: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             }
         );
@@ -2302,6 +2395,8 @@ mod tests {
                 duration: Duration::from_millis(5),
                 formatted_output: "done\n".into(),
                 status: CoreExecCommandStatus::Completed,
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
@@ -2336,6 +2431,8 @@ mod tests {
                 }],
                 aggregated_output: Some("done\n".into()),
                 exit_code: Some(0),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(5),
             }
         );
@@ -2393,6 +2490,8 @@ mod tests {
                 duration: Duration::from_millis(5),
                 formatted_output: "done\n".into(),
                 status: CoreExecCommandStatus::Completed,
+                started_at_ms: None,
+                completed_at_ms: None,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
@@ -2454,6 +2553,7 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                started_at_ms: None,
             }),
         ];
 
@@ -2484,6 +2584,9 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    started_at_ms: None,
+                    completed_at_ms: None,
+                    duration_ms: None,
                 },
             ]
         );
@@ -2549,6 +2652,9 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    started_at_ms: None,
+                    completed_at_ms: None,
+                    duration_ms: None,
                 },
             ]
         );
@@ -2734,6 +2840,9 @@ mod tests {
                 receiver_agent_nickname: None,
                 receiver_agent_role: None,
                 status: AgentStatus::Completed(None),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2764,6 +2873,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
     }
@@ -2791,6 +2903,9 @@ mod tests {
                 model: "gpt-5.4-mini".into(),
                 reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
                 status: AgentStatus::Running,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }),
         ];
 
@@ -2821,6 +2936,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
     }
@@ -2847,6 +2965,7 @@ mod tests {
                     sender_thread_id: sender,
                     receiver_thread_id: receiver,
                     prompt: "new task".into(),
+                    started_at_ms: None,
                 },
             ),
             EventMsg::CollabAgentInteractionEnd(
@@ -2858,6 +2977,9 @@ mod tests {
                     receiver_agent_role: None,
                     prompt: "new task".into(),
                     status: AgentStatus::Interrupted,
+                    started_at_ms: None,
+                    completed_at_ms: None,
+                    duration_ms: None,
                 },
             ),
         ];
@@ -2889,6 +3011,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
     }
