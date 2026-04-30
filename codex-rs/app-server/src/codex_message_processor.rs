@@ -496,10 +496,26 @@ enum AppListLoadResult {
     Directory(Result<Vec<AppInfo>, String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ThreadShutdownResult {
     Complete,
     SubmitFailed,
     TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThreadRolloutMoveOperation {
+    Archive,
+    Unarchive,
+}
+
+impl ThreadRolloutMoveOperation {
+    fn label(self) -> &'static str {
+        match self {
+            ThreadRolloutMoveOperation::Archive => "archive",
+            ThreadRolloutMoveOperation::Unarchive => "unarchive",
+        }
+    }
 }
 
 enum ThreadReadViewError {
@@ -3563,8 +3579,7 @@ impl CodexMessageProcessor {
             .await
             .is_ok_and(|thread| thread.archived_at.is_some())
         {
-            self.prepare_thread_for_rollout_move(thread_id, "unarchive")
-                .await;
+            self.prepare_thread_for_unarchive(thread_id).await?;
         }
 
         let fallback_provider = self.config.model_provider_id.clone();
@@ -5999,14 +6014,66 @@ impl CodexMessageProcessor {
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
-        self.prepare_thread_for_rollout_move(thread_id, "archive")
+        self.prepare_thread_for_rollout_move(thread_id, ThreadRolloutMoveOperation::Archive)
             .await;
     }
 
-    async fn prepare_thread_for_rollout_move(&self, thread_id: ThreadId, operation: &str) {
+    async fn prepare_thread_for_unarchive(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        // Unlike archive, unarchive must not move an archived rollout while a
+        // live thread may still be writing to that archived path. Keep the
+        // running thread registered on shutdown failure so callers can retry
+        // instead of observing a cold, stale path move.
+        let conversation = match self.thread_manager.get_thread(thread_id).await {
+            Ok(conversation) => conversation,
+            Err(_) => {
+                self.finalize_thread_teardown(thread_id).await;
+                return Ok(());
+            }
+        };
+
+        info!("thread {thread_id} was active; shutting down before unarchive");
+        let shutdown_result = Self::wait_for_thread_shutdown(&conversation).await;
+        if let Some(error) = rollout_move_shutdown_error(
+            ThreadRolloutMoveOperation::Unarchive,
+            shutdown_result,
+            thread_id,
+        ) {
+            match shutdown_result {
+                ThreadShutdownResult::Complete => {}
+                ThreadShutdownResult::SubmitFailed => {
+                    error!("failed to submit Shutdown to thread {thread_id}; aborting unarchive");
+                }
+                ThreadShutdownResult::TimedOut => {
+                    warn!("thread {thread_id} shutdown timed out; aborting unarchive");
+                }
+            }
+            return Err(error);
+        }
+
+        if self
+            .thread_manager
+            .remove_thread(&thread_id)
+            .await
+            .is_none()
+        {
+            info!("thread {thread_id} was already removed before unarchive teardown finalized");
+        }
+        self.finalize_thread_teardown(thread_id).await;
+        Ok(())
+    }
+
+    async fn prepare_thread_for_rollout_move(
+        &self,
+        thread_id: ThreadId,
+        operation: ThreadRolloutMoveOperation,
+    ) {
         // If the thread is active, request shutdown and wait briefly.
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
+            let operation = operation.label();
             info!("thread {thread_id} was active; shutting down before {operation}");
             match Self::wait_for_thread_shutdown(&conversation).await {
                 ThreadShutdownResult::Complete => {}
@@ -9025,6 +9092,28 @@ fn internal_error(message: impl Into<String>) -> JSONRPCErrorError {
     }
 }
 
+fn rollout_move_shutdown_error(
+    operation: ThreadRolloutMoveOperation,
+    shutdown_result: ThreadShutdownResult,
+    thread_id: ThreadId,
+) -> Option<JSONRPCErrorError> {
+    match (operation, shutdown_result) {
+        (_, ThreadShutdownResult::Complete)
+        | (ThreadRolloutMoveOperation::Archive, ThreadShutdownResult::SubmitFailed)
+        | (ThreadRolloutMoveOperation::Archive, ThreadShutdownResult::TimedOut) => None,
+        (ThreadRolloutMoveOperation::Unarchive, ThreadShutdownResult::SubmitFailed) => {
+            Some(invalid_request(format!(
+                "thread {thread_id} shutdown could not be submitted before unarchive; retry thread/unarchive"
+            )))
+        }
+        (ThreadRolloutMoveOperation::Unarchive, ThreadShutdownResult::TimedOut) => {
+            Some(invalid_request(format!(
+                "thread {thread_id} shutdown timed out before unarchive; retry thread/unarchive"
+            )))
+        }
+    }
+}
+
 fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, JSONRPCErrorError> {
     ThreadId::from_string(thread_id)
         .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
@@ -9945,6 +10034,62 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[test]
+    fn unarchive_rollout_move_requires_completed_active_thread_shutdown() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("thread id");
+
+        assert!(
+            rollout_move_shutdown_error(
+                ThreadRolloutMoveOperation::Unarchive,
+                ThreadShutdownResult::Complete,
+                thread_id,
+            )
+            .is_none(),
+            "completed shutdown should allow unarchive"
+        );
+
+        for shutdown_result in [
+            ThreadShutdownResult::SubmitFailed,
+            ThreadShutdownResult::TimedOut,
+        ] {
+            let err = rollout_move_shutdown_error(
+                ThreadRolloutMoveOperation::Unarchive,
+                shutdown_result,
+                thread_id,
+            )
+            .expect("incomplete shutdown should reject unarchive");
+            assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+            assert!(
+                err.message.contains("retry thread/unarchive"),
+                "unexpected error: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn archive_rollout_move_preserves_best_effort_after_shutdown_failure() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("thread id");
+
+        for shutdown_result in [
+            ThreadShutdownResult::Complete,
+            ThreadShutdownResult::SubmitFailed,
+            ThreadShutdownResult::TimedOut,
+        ] {
+            assert!(
+                rollout_move_shutdown_error(
+                    ThreadRolloutMoveOperation::Archive,
+                    shutdown_result,
+                    thread_id,
+                )
+                .is_none(),
+                "archive should keep best-effort rollout move behavior"
+            );
+        }
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {

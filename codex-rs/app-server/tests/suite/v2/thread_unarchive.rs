@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -245,6 +246,27 @@ async fn thread_unarchive_of_loaded_archived_thread_allows_resume_from_restored_
     let archived_resume: ThreadResumeResponse =
         to_response::<ThreadResumeResponse>(archived_resume_resp)?;
     assert_eq!(archived_resume.thread.path, Some(archived_path.clone()));
+
+    let original_path_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            path: Some(rollout_path.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let original_path_resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(original_path_resume_id)),
+    )
+    .await??;
+    assert!(
+        original_path_resume_err
+            .error
+            .message
+            .contains("mismatched path"),
+        "unexpected resume error: {}",
+        original_path_resume_err.error.message
+    );
 
     let unarchive_id = mcp
         .send_thread_unarchive_request(ThreadUnarchiveParams {
