@@ -1563,6 +1563,7 @@ pub enum HookSource {
     Project,
     Mdm,
     SessionFlags,
+    Plugin,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
     #[default]
@@ -4015,6 +4016,28 @@ mod tests {
         assert_eq!(
             SessionSource::from_startup_arg("app-server").unwrap(),
             SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
+        let communication = InterAgentCommunication {
+            author: AgentPath::root(),
+            recipient: AgentPath::root().join("reviewer").expect("recipient path"),
+            other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
+            content: "review the diff".to_string(),
+            trigger_turn: true,
+        };
+
+        assert_eq!(
+            communication.to_response_input_item(),
+            ResponseInputItem::Message {
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: serde_json::to_string(&communication).expect("serialize communication"),
+                }],
+                phase: Some(MessagePhase::Commentary),
+            }
         );
     }
 

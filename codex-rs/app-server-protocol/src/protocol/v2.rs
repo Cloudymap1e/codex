@@ -469,6 +469,7 @@ v2_enum_from_core!(
         Project,
         Mdm,
         SessionFlags,
+        Plugin,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,
@@ -1091,6 +1092,15 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "MCP_SERVER_CONFIG")]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
+    #[serde(rename = "SUBAGENTS")]
+    #[ts(rename = "SUBAGENTS")]
+    Subagents,
+    #[serde(rename = "HOOKS")]
+    #[ts(rename = "HOOKS")]
+    Hooks,
+    #[serde(rename = "COMMANDS")]
+    #[ts(rename = "COMMANDS")]
+    Commands,
     #[serde(rename = "SESSIONS")]
     #[ts(rename = "SESSIONS")]
     Sessions,
@@ -1120,11 +1130,47 @@ pub struct SessionMigration {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct McpServerMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubagentMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MigrationDetails {
     #[serde(default)]
     pub plugins: Vec<PluginsMigration>,
     #[serde(default)]
     pub sessions: Vec<SessionMigration>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerMigration>,
+    #[serde(default)]
+    pub hooks: Vec<HookMigration>,
+    #[serde(default)]
+    pub subagents: Vec<SubagentMigration>,
+    #[serde(default)]
+    pub commands: Vec<CommandMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -2128,9 +2174,12 @@ pub enum LoginAccountParams {
         #[ts(rename = "apiKey")]
         api_key: String,
     },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
-    Chatgpt,
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        codex_streamlined_login: bool,
+    },
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
@@ -2307,6 +2356,20 @@ pub struct GetAccountParams {
 pub struct GetAccountResponse {
     pub account: Option<Account>,
     pub requires_openai_auth: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelProviderCapabilitiesReadResponse {
+    pub namespace_tools: bool,
+    pub image_generation: bool,
+    pub web_search: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -2875,6 +2938,25 @@ pub struct DeviceKeyPublicResponse {
     pub public_key_spki_der_base64: String,
     pub algorithm: DeviceKeyAlgorithm,
     pub protection_class: DeviceKeyProtectionClass,
+}
+
+/// Current remote-control connection status and environment id exposed to clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlStatusChangedNotification {
+    pub status: RemoteControlConnectionStatus,
+    pub environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum RemoteControlConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+    Errored,
 }
 
 /// Audience for a remote-control client connection device-key proof.
@@ -4278,6 +4360,22 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct HooksListParams {
+    /// When empty, defaults to the current session working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HooksListResponse {
+    pub data: Vec<HooksListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MarketplaceAddParams {
     pub source: String,
     #[ts(optional = nullable)]
@@ -4476,6 +4574,40 @@ pub struct SkillsListEntry {
     pub cwd: PathBuf,
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HooksListEntry {
+    pub cwd: PathBuf,
+    pub hooks: Vec<HookMetadata>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<HookErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookMetadata {
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub matcher: Option<String>,
+    pub command: Option<String>,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub display_order: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HookErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7856,7 +7988,7 @@ mod tests {
                         marketplace_name: "team-marketplace".to_string(),
                         plugin_names: vec!["asana".to_string()],
                     }],
-                    sessions: Vec::new(),
+                    ..Default::default()
                 }),
             }
         );
@@ -7893,7 +8025,7 @@ mod tests {
                             marketplace_name: "team-marketplace".to_string(),
                             plugin_names: vec!["asana".to_string()],
                         }],
-                        sessions: Vec::new(),
+                        ..Default::default()
                     }),
                 }],
             }

@@ -1355,6 +1355,30 @@
             },
             "method": {
               "enum": [
+                "hooks/list"
+              ],
+              "title": "Hooks/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/HooksListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Hooks/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "marketplace/add"
               ],
               "title": "Marketplace/addRequestMethod",
@@ -1970,6 +1994,30 @@
             "params"
           ],
           "title": "Model/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "modelProvider/capabilities/read"
+              ],
+              "title": "ModelProvider/capabilities/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelProviderCapabilitiesReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelProvider/capabilities/readRequest",
           "type": "object"
         },
         {
@@ -3284,6 +3332,17 @@
         "declined"
       ],
       "type": "string"
+    },
+    "CommandMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "Config": {
       "additionalProperties": true,
@@ -4846,6 +4905,9 @@
         "SKILLS",
         "PLUGINS",
         "MCP_SERVER_CONFIG",
+        "SUBAGENTS",
+        "HOOKS",
+        "COMMANDS",
         "SESSIONS"
       ],
       "type": "string"
@@ -6140,6 +6202,21 @@
       "title": "HookCompletedNotification",
       "type": "object"
     },
+    "HookErrorInfo": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "path"
+      ],
+      "type": "object"
+    },
     "HookEventName": {
       "enum": [
         "preToolUse",
@@ -6165,6 +6242,75 @@
         "agent"
       ],
       "type": "string"
+    },
+    "HookMetadata": {
+      "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "handlerType": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "matcher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/HookSource"
+        },
+        "sourcePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeoutSec": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "displayOrder",
+        "eventName",
+        "handlerType",
+        "source",
+        "sourcePath",
+        "timeoutSec"
+      ],
+      "type": "object"
+    },
+    "HookMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "HookOutputEntry": {
       "properties": {
@@ -6310,6 +6456,7 @@
         "project",
         "mdm",
         "sessionFlags",
+        "plugin",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
@@ -6337,6 +6484,68 @@
         "threadId"
       ],
       "title": "HookStartedNotification",
+      "type": "object"
+    },
+    "HooksListEntry": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/HookErrorInfo"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/definitions/HookMetadata"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "errors",
+        "hooks",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "HooksListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwds": {
+          "description": "When empty, defaults to the current session working directory.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "HooksListParams",
+      "type": "object"
+    },
+    "HooksListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/HooksListEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "HooksListResponse",
       "type": "object"
     },
     "ImageDetail": {
@@ -6679,6 +6888,9 @@
         },
         {
           "properties": {
+            "codexStreamlinedLogin": {
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "chatgpt"
@@ -7122,6 +7334,17 @@
       "title": "McpResourceReadResponse",
       "type": "object"
     },
+    "McpServerMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -7446,6 +7669,27 @@
     },
     "MigrationDetails": {
       "properties": {
+        "commands": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CommandMigration"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookMigration"
+          },
+          "type": "array"
+        },
+        "mcpServers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/McpServerMigration"
+          },
+          "type": "array"
+        },
         "plugins": {
           "default": [],
           "items": {
@@ -7457,6 +7701,13 @@
           "default": [],
           "items": {
             "$ref": "#/definitions/SessionMigration"
+          },
+          "type": "array"
+        },
+        "subagents": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SubagentMigration"
           },
           "type": "array"
         }
@@ -7622,6 +7873,32 @@
         "data"
       ],
       "title": "ModelListResponse",
+      "type": "object"
+    },
+    "ModelProviderCapabilitiesReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModelProviderCapabilitiesReadParams",
+      "type": "object"
+    },
+    "ModelProviderCapabilitiesReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "imageGeneration": {
+          "type": "boolean"
+        },
+        "namespaceTools": {
+          "type": "boolean"
+        },
+        "webSearch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "imageGeneration",
+        "namespaceTools",
+        "webSearch"
+      ],
+      "title": "ModelProviderCapabilitiesReadResponse",
       "type": "object"
     },
     "ModelRerouteReason": {
@@ -9171,6 +9448,35 @@
         "remote_control_client_enrollment"
       ],
       "type": "string"
+    },
+    "RemoteControlConnectionStatus": {
+      "enum": [
+        "disabled",
+        "connecting",
+        "connected",
+        "errored"
+      ],
+      "type": "string"
+    },
+    "RemoteControlStatusChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Current remote-control connection status and environment id exposed to clients.",
+      "properties": {
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/RemoteControlConnectionStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "RemoteControlStatusChangedNotification",
+      "type": "object"
     },
     "RequestId": {
       "anyOf": [
@@ -10912,6 +11218,26 @@
           "properties": {
             "method": {
               "enum": [
+                "remoteControl/status/changed"
+              ],
+              "title": "RemoteControl/status/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RemoteControlStatusChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RemoteControl/status/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "externalAgentConfig/import/completed"
               ],
               "title": "ExternalAgentConfig/import/completedNotificationMethod",
@@ -11971,6 +12297,17 @@
           "type": "object"
         }
       ]
+    },
+    "SubagentMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "TerminalInteractionNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

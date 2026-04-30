@@ -30,7 +30,6 @@
 //! here. That split lets the composer stage a recall entry before clearing input while this module
 //! records the attempted slash command after dispatch just like ordinary submitted text.
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -95,9 +94,7 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusDetail;
-use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -191,11 +188,7 @@ use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
-#[cfg(test)]
-use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
-#[cfg(test)]
-use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 #[cfg(test)]
@@ -393,6 +386,7 @@ use self::goal_status::GoalStatusState;
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
 mod interrupts;
+mod mcp_startup;
 use self::interrupts::InterruptManager;
 mod keymap_picker;
 mod session_header;
@@ -422,13 +416,13 @@ use crate::streaming::controller::StreamController;
 
 use chrono::Local;
 use codex_file_search::FileMatch;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
@@ -910,6 +904,7 @@ pub(crate) struct ChatWidget {
     plugin_install_apps_needing_auth: Vec<AppSummary>,
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
+    newly_installed_marketplace_tab_id: Option<String>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -2592,6 +2587,8 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
+            self.thread_id
+                .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
@@ -3468,249 +3465,6 @@ impl ChatWidget {
         if verifications.contains(&AppServerModelVerification::TrustedAccessForCyber) {
             self.on_warning(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING);
         }
-    }
-
-    /// Record one MCP startup update, promoting it into either the active startup
-    /// round or a buffered "next" round.
-    ///
-    /// This path has to deal with lossy app-server delivery. After
-    /// `finish_mcp_startup()` or `finish_mcp_startup_after_lag()`, we briefly
-    /// ignore incoming updates so stale events from the just-finished round do not
-    /// reopen startup. While that guard is active we buffer updates for a possible
-    /// next round, and only reactivate once the buffered set is coherent enough to
-    /// treat as a fresh startup round.
-    fn update_mcp_startup_status(
-        &mut self,
-        server: String,
-        status: McpStartupStatus,
-        complete_when_settled: bool,
-    ) {
-        let mut activated_pending_round = false;
-        let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
-            // Ignore-mode buffers the next plausible round so stale post-finish
-            // updates cannot immediately reopen startup. A fresh `Starting`
-            // update resets the buffer only if we have not already seen a
-            // pending-round `Starting`; this preserves valid interleavings like
-            // `alpha: Starting -> alpha: Ready -> beta: Starting`.
-            if matches!(status, McpStartupStatus::Starting)
-                && !self.mcp_startup_pending_next_round_saw_starting
-            {
-                self.mcp_startup_pending_next_round.clear();
-                self.mcp_startup_allow_terminal_only_next_round = false;
-            }
-            self.mcp_startup_pending_next_round_saw_starting |=
-                matches!(status, McpStartupStatus::Starting);
-            self.mcp_startup_pending_next_round.insert(server, status);
-            let Some(expected_servers) = &self.mcp_startup_expected_servers else {
-                return;
-            };
-            let saw_full_round = expected_servers.is_empty()
-                || expected_servers
-                    .iter()
-                    .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
-            let saw_starting = self
-                .mcp_startup_pending_next_round
-                .values()
-                .any(|state| matches!(state, McpStartupStatus::Starting));
-            if !(saw_full_round
-                && (saw_starting || self.mcp_startup_allow_terminal_only_next_round))
-            {
-                return;
-            }
-
-            // The buffered map now looks like a complete next round, so promote it
-            // to the active round and resume normal completion tracking.
-            self.mcp_startup_ignore_updates_until_next_start = false;
-            self.mcp_startup_allow_terminal_only_next_round = false;
-            self.mcp_startup_pending_next_round_saw_starting = false;
-            activated_pending_round = true;
-            std::mem::take(&mut self.mcp_startup_pending_next_round)
-        } else {
-            // Normal path: fold the update into the active round and surface
-            // per-server failures immediately.
-            let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
-            if let McpStartupStatus::Failed { error } = &status {
-                self.on_warning(error);
-            }
-            startup_status.insert(server, status);
-            startup_status
-        };
-        if activated_pending_round {
-            // A promoted buffered round may already contain terminal failures.
-            for state in startup_status.values() {
-                if let McpStartupStatus::Failed { error } = state {
-                    self.on_warning(error);
-                }
-            }
-        }
-        self.mcp_startup_status = Some(startup_status);
-        self.update_task_running_state();
-
-        // App-server-backed startup completes when every expected server has
-        // reported a non-Starting status. Lag handling can force an earlier
-        // settle via `finish_mcp_startup_after_lag()`.
-        if complete_when_settled
-            && let Some(current) = &self.mcp_startup_status
-            && let Some(expected_servers) = &self.mcp_startup_expected_servers
-            && !current.is_empty()
-            && expected_servers
-                .iter()
-                .all(|name| current.contains_key(name))
-            && current
-                .values()
-                .all(|state| !matches!(state, McpStartupStatus::Starting))
-        {
-            let mut failed = Vec::new();
-            let mut cancelled = Vec::new();
-            for (name, state) in current {
-                match state {
-                    McpStartupStatus::Ready => {}
-                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
-                    McpStartupStatus::Cancelled => cancelled.push(name.clone()),
-                    McpStartupStatus::Starting => {}
-                }
-            }
-            failed.sort();
-            cancelled.sort();
-            self.finish_mcp_startup(failed, cancelled);
-            return;
-        }
-        if let Some(current) = &self.mcp_startup_status {
-            // Otherwise keep the status header focused on the remaining
-            // in-progress servers for the active round.
-            let total = current.len();
-            let mut starting: Vec<_> = current
-                .iter()
-                .filter_map(|(name, state)| {
-                    if matches!(state, McpStartupStatus::Starting) {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            starting.sort();
-            if let Some(first) = starting.first() {
-                let completed = total.saturating_sub(starting.len());
-                let max_to_show = 3;
-                let mut to_show: Vec<String> = starting
-                    .iter()
-                    .take(max_to_show)
-                    .map(ToString::to_string)
-                    .collect();
-                if starting.len() > max_to_show {
-                    to_show.push("…".to_string());
-                }
-                let header = if total > 1 {
-                    format!(
-                        "Starting MCP servers ({completed}/{total}): {}",
-                        to_show.join(", ")
-                    )
-                } else {
-                    format!("Booting MCP server: {first}")
-                };
-                self.set_status_header(header);
-            }
-        }
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
-    }
-
-    #[cfg(test)]
-    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        self.update_mcp_startup_status(ev.server, ev.status, /*complete_when_settled*/ false);
-    }
-
-    fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
-        if !cancelled.is_empty() {
-            self.on_warning(format!(
-                "MCP startup interrupted. The following servers were not initialized: {}",
-                cancelled.join(", ")
-            ));
-        }
-        let mut parts = Vec::new();
-        if !failed.is_empty() {
-            parts.push(format!("failed: {}", failed.join(", ")));
-        }
-        if !parts.is_empty() {
-            self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
-        }
-
-        self.mcp_startup_status = None;
-        self.mcp_startup_ignore_updates_until_next_start = true;
-        self.mcp_startup_allow_terminal_only_next_round = false;
-        self.mcp_startup_pending_next_round.clear();
-        self.mcp_startup_pending_next_round_saw_starting = false;
-        self.update_task_running_state();
-        self.maybe_send_next_queued_input();
-        self.request_redraw();
-    }
-
-    pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
-        if self.mcp_startup_ignore_updates_until_next_start {
-            if self.mcp_startup_pending_next_round.is_empty() {
-                self.mcp_startup_pending_next_round_saw_starting = false;
-            }
-            self.mcp_startup_allow_terminal_only_next_round = true;
-        }
-
-        let Some(current) = &self.mcp_startup_status else {
-            return;
-        };
-
-        let mut failed = Vec::new();
-        let mut cancelled = Vec::new();
-
-        let mut server_names: BTreeSet<String> = current.keys().cloned().collect();
-        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
-            server_names.extend(expected_servers.iter().cloned());
-        }
-
-        for name in server_names {
-            match current.get(&name) {
-                Some(McpStartupStatus::Ready) => {}
-                Some(McpStartupStatus::Failed { .. }) => failed.push(name),
-                Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
-                    cancelled.push(name);
-                }
-            }
-        }
-
-        failed.sort();
-        failed.dedup();
-        cancelled.sort();
-        cancelled.dedup();
-        self.finish_mcp_startup(failed, cancelled);
-    }
-
-    #[cfg(test)]
-    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
-        let failed = ev.failed.into_iter().map(|f| f.server).collect();
-        self.finish_mcp_startup(failed, ev.cancelled);
-    }
-
-    fn on_mcp_server_status_updated(&mut self, notification: McpServerStatusUpdatedNotification) {
-        let status = match notification.status {
-            McpServerStartupState::Starting => McpStartupStatus::Starting,
-            McpServerStartupState::Ready => McpStartupStatus::Ready,
-            McpServerStartupState::Failed => McpStartupStatus::Failed {
-                error: notification.error.unwrap_or_else(|| {
-                    format!("MCP client for `{}` failed to start", notification.name)
-                }),
-            },
-            McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
-        };
-        self.update_mcp_startup_status(
-            notification.name,
-            status,
-            /*complete_when_settled*/ true,
-        );
     }
 
     /// Handle a turn aborted due to user interrupt (Esc), budget exhaustion,
@@ -4973,7 +4727,7 @@ impl ChatWidget {
         }
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
-            Some(MessagePhase::FinalAnswer) | None => false,
+            Some(MessagePhase::FinalAnswer) | None => !self.pending_steers.is_empty(),
             Some(MessagePhase::Commentary) => true,
         };
         self.maybe_restore_status_indicator_after_stream_idle();
@@ -5599,6 +5353,7 @@ impl ChatWidget {
             plugin_install_apps_needing_auth: Vec::new(),
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
+            newly_installed_marketplace_tab_id: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -6480,14 +6235,11 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = Some(self.config.permissions.permission_profile());
+        let permission_profile = self.config.permissions.permission_profile();
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
-            self.config
-                .permissions
-                .legacy_sandbox_policy(self.config.cwd.as_path()),
             permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
@@ -7262,6 +7014,7 @@ impl ChatWidget {
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
+            | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
@@ -8562,22 +8315,19 @@ impl ChatWidget {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    /*approval_policy*/ None,
-                    /*approvals_reviewer*/ None,
-                    /*sandbox_policy*/ None,
-                    /*windows_sandbox_level*/ None,
-                    Some(switch_model_for_events.clone()),
-                    Some(Some(default_effort)),
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
+                /*windows_sandbox_level*/ None,
+                Some(switch_model_for_events.clone()),
+                Some(Some(default_effort)),
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
             tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
         })];
@@ -8786,22 +8536,19 @@ impl ChatWidget {
                 let name = Self::personality_label(personality).to_string();
                 let description = Some(Self::personality_description(personality).to_string());
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(
-                        AppCommand::override_turn_context(
-                            /*cwd*/ None,
-                            /*approval_policy*/ None,
-                            /*approvals_reviewer*/ None,
-                            /*sandbox_policy*/ None,
-                            /*windows_sandbox_level*/ None,
-                            /*model*/ None,
-                            /*effort*/ None,
-                            /*summary*/ None,
-                            /*service_tier*/ None,
-                            /*collaboration_mode*/ None,
-                            Some(personality),
-                        )
-                        .into_core(),
-                    ));
+                    tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*permission_profile*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        Some(personality),
+                    )));
                     tx.send(AppEvent::UpdatePersonality(personality));
                     tx.send(AppEvent::PersistPersonalitySelection { personality });
                 })];
@@ -9540,14 +9287,11 @@ impl ChatWidget {
         self.open_permissions_popup();
     }
 
-    /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
+    /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
         let current_approval = self.config.permissions.approval_policy.value();
-        let current_sandbox = self
-            .config
-            .permissions
-            .legacy_sandbox_policy(self.config.cwd.as_path());
+        let current_permission_profile = self.config.permissions.permission_profile();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -9653,7 +9397,7 @@ impl ChatWidget {
                     } else {
                         Self::approval_preset_actions(
                             preset.approval,
-                            preset.sandbox.clone(),
+                            preset.permission_profile.clone(),
                             base_name.clone(),
                             ApprovalsReviewer::User,
                         )
@@ -9663,7 +9407,7 @@ impl ChatWidget {
                 {
                     Self::approval_preset_actions(
                         preset.approval,
-                        preset.sandbox.clone(),
+                        preset.permission_profile.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
                     )
@@ -9671,7 +9415,7 @@ impl ChatWidget {
             } else {
                 Self::approval_preset_actions(
                     preset.approval,
-                    preset.sandbox.clone(),
+                    preset.permission_profile.clone(),
                     base_name.clone(),
                     ApprovalsReviewer::User,
                 )
@@ -9683,7 +9427,8 @@ impl ChatWidget {
                     is_current: current_review_policy == ApprovalsReviewer::User
                         && Self::preset_matches_current(
                             current_approval,
-                            &current_sandbox,
+                            &current_permission_profile,
+                            self.config.cwd.as_path(),
                             &preset,
                         ),
                     actions: default_actions,
@@ -9701,13 +9446,14 @@ impl ChatWidget {
                         ),
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
-                                current_approval,
-                                &current_sandbox,
-                                &preset,
-                            ),
+                            current_approval,
+                            &current_permission_profile,
+                            self.config.cwd.as_path(),
+                            &preset,
+                        ),
                         actions: Self::approval_preset_actions(
                             preset.approval,
-                            preset.sandbox.clone(),
+                            preset.permission_profile.clone(),
                             "Auto-review".to_string(),
                             ApprovalsReviewer::AutoReview,
                         ),
@@ -9723,7 +9469,8 @@ impl ChatWidget {
                     description: base_description,
                     is_current: Self::preset_matches_current(
                         current_approval,
-                        &current_sandbox,
+                        &current_permission_profile,
+                        self.config.cwd.as_path(),
                         &preset,
                     ),
                     actions: default_actions,
@@ -9816,7 +9563,7 @@ impl ChatWidget {
 
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: Op::ApproveGuardianDeniedAction { event },
+            op: AppCommand::from(Op::ApproveGuardianDeniedAction { event }),
         });
         self.add_info_message(
             "Approval recorded for one retry of the selected auto-review denial.".to_string(),
@@ -9848,30 +9595,27 @@ impl ChatWidget {
 
     fn approval_preset_actions(
         approval: AskForApproval,
-        sandbox: SandboxPolicy,
+        permission_profile: PermissionProfile,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let sandbox_clone = sandbox.clone();
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    Some(sandbox_clone.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
+            let permission_profile_clone = permission_profile.clone();
+            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                Some(approval),
+                Some(approvals_reviewer),
+                Some(permission_profile_clone.clone()),
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::UpdatePermissionProfile(permission_profile_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
@@ -9884,36 +9628,39 @@ impl ChatWidget {
 
     fn preset_matches_current(
         current_approval: AskForApproval,
-        current_sandbox: &SandboxPolicy,
+        current_permission_profile: &PermissionProfile,
+        cwd: &std::path::Path,
         preset: &ApprovalPreset,
     ) -> bool {
         if current_approval != preset.approval {
             return false;
         }
 
-        match (current_sandbox, &preset.sandbox) {
-            (SandboxPolicy::DangerFullAccess, SandboxPolicy::DangerFullAccess) => true,
-            (
-                SandboxPolicy::ReadOnly {
-                    network_access: current_network_access,
-                    ..
-                },
-                SandboxPolicy::ReadOnly {
-                    network_access: preset_network_access,
-                    ..
-                },
-            ) => current_network_access == preset_network_access,
-            (
-                SandboxPolicy::WorkspaceWrite {
-                    network_access: current_network_access,
-                    ..
-                },
-                SandboxPolicy::WorkspaceWrite {
-                    network_access: preset_network_access,
-                    ..
-                },
-            ) => current_network_access == preset_network_access,
-            _ => false,
+        match preset.id {
+            "full-access" => matches!(current_permission_profile, PermissionProfile::Disabled),
+            "read-only" => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && !file_system_policy.has_full_disk_write_access()
+                    && file_system_policy
+                        .get_writable_roots_with_cwd(cwd)
+                        .is_empty()
+                    && current_permission_profile.network_sandbox_policy()
+                        == preset.permission_profile.network_sandbox_policy()
+            }
+            "auto" => {
+                let file_system_policy = current_permission_profile.file_system_sandbox_policy();
+                matches!(
+                    current_permission_profile,
+                    PermissionProfile::Managed { .. }
+                ) && file_system_policy.can_write_path_with_cwd(cwd, cwd)
+                    && !file_system_policy.has_full_disk_write_access()
+                    && current_permission_profile.network_sandbox_policy()
+                        == preset.permission_profile.network_sandbox_policy()
+            }
+            _ => current_permission_profile == &preset.permission_profile,
         }
     }
 
@@ -9929,14 +9676,19 @@ impl ChatWidget {
         }
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let Ok(policy) = self
+            .config
+            .permissions
+            .permission_profile()
+            .to_legacy_sandbox_policy(self.config.cwd.as_path())
+        else {
+            return Some((Vec::new(), 0, true));
+        };
         match codex_windows_sandbox::apply_world_writable_scan_and_denies(
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &self
-                .config
-                .permissions
-                .legacy_sandbox_policy(self.config.cwd.as_path()),
+            &policy,
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -9957,7 +9709,7 @@ impl ChatWidget {
     ) {
         let selected_name = preset.label.to_string();
         let approval = preset.approval;
-        let sandbox = preset.sandbox;
+        let permission_profile = preset.permission_profile;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
@@ -9974,7 +9726,7 @@ impl ChatWidget {
 
         let mut accept_actions = Self::approval_preset_actions(
             approval,
-            sandbox.clone(),
+            permission_profile.clone(),
             selected_name.clone(),
             ApprovalsReviewer::User,
         );
@@ -9984,7 +9736,7 @@ impl ChatWidget {
 
         let mut accept_and_remember_actions = Self::approval_preset_actions(
             approval,
-            sandbox,
+            permission_profile,
             selected_name,
             ApprovalsReviewer::User,
         );
@@ -10041,27 +9793,27 @@ impl ChatWidget {
         extra_count: usize,
         failed_scan: bool,
     ) {
-        let (approval, sandbox) = match &preset {
-            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
+        let (approval, permission_profile) = match &preset {
+            Some(p) => (Some(p.approval), Some(p.permission_profile.clone())),
             None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let describe_policy = |policy: &SandboxPolicy| match policy {
-            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
-            _ => "Agent mode",
+        let describe_profile = |profile: &PermissionProfile| {
+            if matches!(profile, PermissionProfile::Disabled) {
+                "Full Access mode"
+            } else if profile
+                .file_system_sandbox_policy()
+                .can_write_path_with_cwd(self.config.cwd.as_path(), self.config.cwd.as_path())
+            {
+                "Agent mode"
+            } else {
+                "Read-Only mode"
+            }
         };
         let mode_label = preset
             .as_ref()
-            .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| {
-                describe_policy(
-                    &self
-                        .config
-                        .permissions
-                        .legacy_sandbox_policy(self.config.cwd.as_path()),
-                )
-            });
+            .map(|p| describe_profile(&p.permission_profile))
+            .unwrap_or_else(|| describe_profile(&self.config.permissions.permission_profile()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -10093,8 +9845,9 @@ impl ChatWidget {
         }
         let header = ColumnRenderable::with(header_children);
 
-        // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
-        // so downstream policy-change hooks don't re-trigger the warning.
+        // Build actions ensuring acknowledgement happens before applying the
+        // new permission profile, so downstream policy-change hooks don't
+        // re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
         // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
         // /permissions), to avoid duplicate warnings from the ensuing policy change.
@@ -10103,10 +9856,10 @@ impl ChatWidget {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
             }));
         }
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
+        if let (Some(approval), Some(permission_profile)) = (approval, permission_profile.clone()) {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
-                sandbox,
+                permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));
@@ -10117,10 +9870,10 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
+        if let (Some(approval), Some(permission_profile)) = (approval, permission_profile) {
             accept_and_remember_actions.extend(Self::approval_preset_actions(
                 approval,
-                sandbox,
+                permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
             ));
@@ -10439,12 +10192,13 @@ impl ChatWidget {
         }
     }
 
-    /// Set the sandbox policy in the widget's config copy.
+    /// Set the permission profile in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config
-            .permissions
-            .set_legacy_sandbox_policy(policy, self.config.cwd.as_path())
+    pub(crate) fn set_permission_profile(
+        &mut self,
+        profile: PermissionProfile,
+    ) -> ConstraintResult<()> {
+        self.config.permissions.set_permission_profile(profile)
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -10696,12 +10450,12 @@ impl ChatWidget {
             self.config.notices.fast_default_opt_out = Some(true);
         }
         self.set_service_tier(service_tier);
-        self.app_event_tx.send(AppEvent::CodexOp(
-            AppCommand::override_turn_context(
+        self.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
-                /*sandbox_policy*/ None,
+                /*permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -10709,9 +10463,7 @@ impl ChatWidget {
                 Some(service_tier),
                 /*collaboration_mode*/ None,
                 /*personality*/ None,
-            )
-            .into_core(),
-        ));
+            )));
         self.app_event_tx
             .send(AppEvent::PersistServiceTierSelection { service_tier });
     }
@@ -11778,7 +11530,7 @@ impl ChatWidget {
                 }
             }
             CodexOpTarget::AppEvent => {
-                self.app_event_tx.send(AppEvent::CodexOp(op.into()));
+                self.app_event_tx.send(AppEvent::CodexOp(op));
             }
         }
         true

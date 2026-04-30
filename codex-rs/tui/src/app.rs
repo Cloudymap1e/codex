@@ -122,7 +122,6 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
-use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
@@ -131,11 +130,14 @@ use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
+#[cfg(target_os = "windows")]
+use codex_protocol::protocol::FileSystemSandboxKind;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
@@ -143,7 +145,6 @@ use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
@@ -308,7 +309,7 @@ fn default_exec_approval_decisions(
 struct AutoReviewMode {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
 }
 
 /// Enabling the Auto-review experiment in the TUI should also switch the
@@ -319,9 +320,18 @@ fn auto_review_mode() -> AutoReviewMode {
     AutoReviewMode {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
-        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::workspace_write(),
     }
 }
+
+#[cfg(target_os = "windows")]
+fn managed_filesystem_sandbox_is_restricted(permission_profile: &PermissionProfile) -> bool {
+    matches!(
+        permission_profile.file_system_sandbox_policy().kind,
+        FileSystemSandboxKind::Restricted
+    )
+}
+
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -508,7 +518,7 @@ pub(crate) struct App {
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
-    runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    runtime_permission_profile_override: Option<PermissionProfile>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -732,14 +742,7 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-        let model_catalog = Arc::new(ModelCatalog::new(
-            available_models.clone(),
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(Feature::DefaultModeRequestUserInput),
-            },
-        ));
+        let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
@@ -906,7 +909,7 @@ See the Codex keymap documentation for supported actions and examples."
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
-            runtime_sandbox_policy_override: None,
+            runtime_permission_profile_override: None,
             file_search,
             enhanced_keys_supported,
             keymap: runtime_keymap,
@@ -947,20 +950,14 @@ See the Codex keymap documentation for supported actions and examples."
                 .await?;
         }
 
-        // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
+        // On startup, if a managed filesystem sandbox is active, warn about
+        // world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let startup_sandbox_policy = app
-                .config
-                .permissions
-                .legacy_sandbox_policy(app.config.cwd.as_path());
+            let startup_permission_profile = app.config.permissions.permission_profile();
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
-                && matches!(
-                    &startup_sandbox_policy,
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-                )
+                && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app
                     .config
                     .notices
@@ -971,8 +968,13 @@ See the Codex keymap documentation for supported actions and examples."
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = startup_sandbox_policy;
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+                Self::spawn_world_writable_scan(
+                    cwd,
+                    env_map,
+                    logs_base_dir,
+                    startup_permission_profile,
+                    tx,
+                );
             }
         }
 
