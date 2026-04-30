@@ -6311,8 +6311,10 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(notification);
                 }
             }
-            ServerNotification::ThreadRealtimeItemAdded(_notification) => {
-                // The TUI currently renders transcript-specific realtime notifications instead.
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.on_realtime_item_added(notification);
+                }
             }
             ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
                 if !from_replay {

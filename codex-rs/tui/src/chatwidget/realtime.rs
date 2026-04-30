@@ -2,6 +2,7 @@ use super::*;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
@@ -189,6 +190,24 @@ impl ChatWidget {
         self.enqueue_realtime_audio_out(&notification.audio);
     }
 
+    pub(super) fn on_realtime_item_added(
+        &mut self,
+        notification: ThreadRealtimeItemAddedNotification,
+    ) {
+        if self.realtime_conversation_uses_webrtc() {
+            return;
+        }
+        if matches!(
+            notification
+                .item
+                .get("type")
+                .and_then(|value| value.as_str()),
+            Some("input_audio_buffer.speech_started" | "response.cancelled")
+        ) {
+            self.interrupt_realtime_audio_playback();
+        }
+    }
+
     pub(super) fn on_realtime_error(&mut self, notification: ThreadRealtimeErrorNotification) {
         self.fail_realtime_conversation(format!("Realtime voice error: {}", notification.message));
     }
@@ -346,6 +365,16 @@ impl ChatWidget {
             let _ = frame;
         }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_realtime_audio_playback(&mut self) {
+        if let Some(player) = &self.realtime_conversation.audio_player {
+            player.clear();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_realtime_audio_playback(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn start_realtime_local_audio(&mut self) {
