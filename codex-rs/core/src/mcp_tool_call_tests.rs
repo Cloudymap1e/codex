@@ -18,6 +18,7 @@ use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -2259,6 +2260,126 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         "prompt mode should wait for approval instead of auto-allowing"
     );
     approval_task.abort();
+}
+
+#[tokio::test]
+async fn approve_mode_prompts_when_arc_steers_interactive_session_and_accepts() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "steer-model",
+            "short_reason": "needs approval",
+            "rationale": "high-risk action",
+            "risk_score": 96,
+            "risk_level": "critical",
+            "evidence": [{
+                "message": "dangerous_tool",
+                "why": "high-risk action",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    {
+        let turn_context = Arc::get_mut(&mut turn_context)
+            .expect("turn context should be uniquely owned during test setup");
+        turn_context.session_source = SessionSource::Cli;
+        turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+            codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ));
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = server.uri();
+        config
+            .features
+            .disable(codex_features::Feature::ToolCallMcpElicitation)
+            .expect("test setup should allow disabling MCP tool elicitation");
+        turn_context.config = Arc::new(config);
+    }
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+
+    let invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "id": 1 })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Performs a risky action.".to_string()),
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-arc-interactive",
+                &invocation,
+                "mcp__test__tool",
+                Some(&metadata),
+                AppToolApproval::Approve,
+            )
+            .await
+        })
+    };
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("ARC steer should ask the interactive user for approval")
+        .expect("approval prompt event should be sent");
+    let EventMsg::RequestUserInput(request) = event.msg else {
+        panic!("expected RequestUserInput event");
+    };
+    assert_eq!(request.call_id, "call-arc-interactive");
+    let [question] = request.questions.as_slice() else {
+        panic!("expected exactly one MCP approval question");
+    };
+    assert_eq!(question.id, "mcp_tool_call_approval_call-arc-interactive");
+    assert!(
+        question.question.contains("high-risk action"),
+        "ARC rationale should be shown in the approval prompt: {:?}",
+        question.question
+    );
+
+    session
+        .notify_user_input_response(
+            &turn_context.sub_id,
+            RequestUserInputResponse {
+                answers: HashMap::from([(
+                    question.id.clone(),
+                    RequestUserInputAnswer {
+                        answers: vec![MCP_TOOL_APPROVAL_ACCEPT.to_string()],
+                    },
+                )]),
+            },
+        )
+        .await;
+
+    let decision = tokio::time::timeout(std::time::Duration::from_secs(1), approval_task)
+        .await
+        .expect("approval task should finish after explicit user approval")
+        .expect("approval task should not panic");
+    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
 }
 
 #[tokio::test]

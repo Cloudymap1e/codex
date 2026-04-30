@@ -51,6 +51,7 @@ use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -936,9 +937,12 @@ async fn maybe_request_mcp_tool_approval(
                 monitor_reason = Some(reason);
             }
             ArcMonitorOutcome::SteerModel(reason) => {
-                return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-                    arc_monitor_interrupt_message(&reason),
-                ));
+                if turn_context.session_source == SessionSource::Exec {
+                    return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+                        arc_monitor_interrupt_message(&reason),
+                    ));
+                }
+                monitor_reason = Some(reason);
             }
         }
     }
