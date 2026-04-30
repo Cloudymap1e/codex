@@ -18,6 +18,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::ConfigToml;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
+use codex_config::merge_toml_values;
 use codex_exec_server::LOCAL_FS;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -171,25 +172,74 @@ fn model_preservation_policy(
     config: &Config,
     role_layer_toml: &TomlValue,
 ) -> ModelPreservationPolicy {
-    let role_selects_profile = role_layer_toml.get("profile").is_some();
-    let role_updates_active_profile_model =
-        role_updates_active_profile_key(config, role_layer_toml, "model");
-    let role_replaces_model_context = role_selects_profile
-        || role_layer_toml.get("model").is_some()
-        || role_updates_active_profile_model;
+    let effective_role_toml = effective_role_toml(config, role_layer_toml);
 
     ModelPreservationPolicy {
-        model: !role_replaces_model_context,
-        reasoning_effort: !role_replaces_model_context
-            && role_layer_toml.get("model_reasoning_effort").is_none()
-            && !role_updates_active_profile_key(config, role_layer_toml, "model_reasoning_effort"),
-        reasoning_summary: !role_replaces_model_context
-            && role_layer_toml.get("model_reasoning_summary").is_none()
-            && !role_updates_active_profile_key(config, role_layer_toml, "model_reasoning_summary"),
-        verbosity: !role_replaces_model_context
-            && role_layer_toml.get("model_verbosity").is_none()
-            && !role_updates_active_profile_key(config, role_layer_toml, "model_verbosity"),
+        model: !role_owns_model_key(config, role_layer_toml, &effective_role_toml, "model"),
+        reasoning_effort: !role_owns_model_key(
+            config,
+            role_layer_toml,
+            &effective_role_toml,
+            "model_reasoning_effort",
+        ),
+        reasoning_summary: !role_owns_model_key(
+            config,
+            role_layer_toml,
+            &effective_role_toml,
+            "model_reasoning_summary",
+        ),
+        verbosity: !role_owns_model_key(
+            config,
+            role_layer_toml,
+            &effective_role_toml,
+            "model_verbosity",
+        ),
     }
+}
+
+fn effective_role_toml(config: &Config, role_layer_toml: &TomlValue) -> TomlValue {
+    let mut effective_role_toml = config.config_layer_stack.effective_config();
+    merge_toml_values(&mut effective_role_toml, role_layer_toml);
+    effective_role_toml
+}
+
+fn role_owns_model_key(
+    config: &Config,
+    role_layer_toml: &TomlValue,
+    effective_role_toml: &TomlValue,
+    key: &str,
+) -> bool {
+    role_layer_toml.get(key).is_some()
+        || role_selected_profile_owns_key(config, role_layer_toml, effective_role_toml, key)
+}
+
+fn role_selected_profile_owns_key(
+    config: &Config,
+    role_layer_toml: &TomlValue,
+    effective_role_toml: &TomlValue,
+    key: &str,
+) -> bool {
+    if let Some(role_profile) = role_layer_toml.get("profile").and_then(TomlValue::as_str) {
+        return profile_contains_key(effective_role_toml, role_profile, key);
+    }
+
+    // When the role does not select a new top-level provider or profile, the current profile stays
+    // active. In that case only edits from the role layer itself should take ownership; persisted
+    // profile defaults must not clobber a caller's runtime-requested model context.
+    if role_layer_toml.get("model_provider").is_none() {
+        return role_updates_active_profile_key(config, role_layer_toml, key);
+    }
+
+    false
+}
+
+fn profile_contains_key(config_toml: &TomlValue, profile_name: &str, key: &str) -> bool {
+    config_toml
+        .get("profiles")
+        .and_then(TomlValue::as_table)
+        .and_then(|profiles| profiles.get(profile_name))
+        .and_then(TomlValue::as_table)
+        .is_some_and(|profile| profile.contains_key(key))
 }
 
 fn role_updates_active_profile_key(

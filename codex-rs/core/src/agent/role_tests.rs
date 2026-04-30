@@ -50,6 +50,22 @@ fn session_flags_layer_count(config: &Config) -> usize {
         .count()
 }
 
+fn set_requested_model_context(config: &mut Config) {
+    config.model = Some("requested-model".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+    config.model_verbosity = Some(Verbosity::High);
+}
+
+fn assert_requested_reasoning_context_preserved(config: &Config) {
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        config.model_reasoning_summary,
+        Some(ReasoningSummary::Detailed)
+    );
+    assert_eq!(config.model_verbosity, Some(Verbosity::High));
+}
+
 #[tokio::test]
 async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
@@ -384,6 +400,161 @@ model_provider = "role-provider"
     assert_eq!(config.active_profile.as_deref(), Some("role-profile"));
     assert_eq!(config.model_provider_id, "role-provider");
     assert_eq!(config.model_provider.name, "Role Provider");
+}
+
+#[tokio::test]
+async fn apply_role_profile_without_model_settings_preserves_requested_model_context() {
+    let home = TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        r#"
+[model_providers.base-provider]
+name = "Base Provider"
+base_url = "https://base.example.com/v1"
+env_key = "BASE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.base-profile]
+model_provider = "base-provider"
+
+[profiles.role-profile]
+model_provider = "role-provider"
+"#,
+    )
+    .await
+    .expect("write config.toml");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            config_profile: Some("base-profile".to_string()),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+    set_requested_model_context(&mut config);
+    let role_path = write_role_config(
+        &home,
+        "profile-role-without-model-settings.toml",
+        "developer_instructions = \"Stay focused\"\nprofile = \"role-profile\"",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.active_profile.as_deref(), Some("role-profile"));
+    assert_eq!(config.model_provider_id, "role-provider");
+    assert_eq!(config.model_provider.name, "Role Provider");
+    assert_eq!(config.model.as_deref(), Some("requested-model"));
+    assert_requested_reasoning_context_preserved(&config);
+}
+
+#[tokio::test]
+async fn apply_role_profile_model_only_preserves_requested_reasoning_context() {
+    let home = TempDir::new().expect("create temp dir");
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        r#"
+[model_providers.base-provider]
+name = "Base Provider"
+base_url = "https://base.example.com/v1"
+env_key = "BASE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[model_providers.role-provider]
+name = "Role Provider"
+base_url = "https://role.example.com/v1"
+env_key = "ROLE_PROVIDER_API_KEY"
+wire_api = "responses"
+
+[profiles.base-profile]
+model_provider = "base-provider"
+
+[profiles.role-profile]
+model_provider = "role-provider"
+model = "profile-model"
+"#,
+    )
+    .await
+    .expect("write config.toml");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            config_profile: Some("base-profile".to_string()),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load config");
+    set_requested_model_context(&mut config);
+    let role_path = write_role_config(
+        &home,
+        "profile-role-with-model-only.toml",
+        "developer_instructions = \"Stay focused\"\nprofile = \"role-profile\"",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.active_profile.as_deref(), Some("role-profile"));
+    assert_eq!(config.model_provider_id, "role-provider");
+    assert_eq!(config.model.as_deref(), Some("profile-model"));
+    assert_requested_reasoning_context_preserved(&config);
+}
+
+#[tokio::test]
+async fn apply_role_model_only_preserves_requested_reasoning_context() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    set_requested_model_context(&mut config);
+    let role_path = write_role_config(
+        &home,
+        "model-only-role.toml",
+        "developer_instructions = \"Stay focused\"\nmodel = \"role-model\"",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.model.as_deref(), Some("role-model"));
+    assert_requested_reasoning_context_preserved(&config);
 }
 
 #[tokio::test]
