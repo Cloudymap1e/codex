@@ -1456,7 +1456,7 @@ To enable or disable a skill by name:
 }
 ```
 
-Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
+Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entry is evaluated using that `cwd`'s effective config, so feature gating and discovered config layers can differ across entries in the same request. Disabled hooks are still returned with `"enabled": false` so clients can render and re-enable them. Hook state is stored under `hooks.state`; clients should treat hooks from managed sources as non-configurable, and user config entries for those keys are ignored during loading. Unmanaged hooks expose a `currentHash`, persisted `trustedHash`, and derived `trustStatus` so clients can distinguish first-seen hooks from hooks whose approved contents have changed. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
 {
@@ -1487,7 +1487,10 @@ Use `hooks/list` to fetch the discovered hooks for one or more `cwds`. Each entr
         "source": "user",
         "pluginId": null,
         "displayOrder": 0,
-        "enabled": true
+        "enabled": true,
+        "currentHash": "sha256:...",
+        "trustedHash": null,
+        "trustStatus": "untrusted"
       }],
       "warnings": [],
       "errors": []

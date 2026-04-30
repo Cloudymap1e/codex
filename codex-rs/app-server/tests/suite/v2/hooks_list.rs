@@ -11,6 +11,7 @@ use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::HookHandlerType;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
+use codex_app_server_protocol::HookTrustStatus;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
@@ -30,6 +31,49 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn command_hook_hash(
+    event_name: &str,
+    matcher: Option<&str>,
+    command: &str,
+    timeout_sec: u64,
+    status_message: Option<&str>,
+) -> String {
+    let codex_config::TomlValue::Table(mut table) =
+        codex_config::TomlValue::Table(Default::default())
+    else {
+        unreachable!("TOML table construction should stay a table");
+    };
+    table.insert(
+        "event_name".to_string(),
+        codex_config::TomlValue::String(event_name.to_string()),
+    );
+    if let Some(matcher) = matcher {
+        table.insert(
+            "matcher".to_string(),
+            codex_config::TomlValue::String(matcher.to_string()),
+        );
+    }
+    table.insert(
+        "handler_type".to_string(),
+        codex_config::TomlValue::String("command".to_string()),
+    );
+    table.insert(
+        "command".to_string(),
+        codex_config::TomlValue::String(command.to_string()),
+    );
+    table.insert(
+        "timeout_sec".to_string(),
+        codex_config::TomlValue::Integer(i64::try_from(timeout_sec).unwrap_or(i64::MAX)),
+    );
+    if let Some(status_message) = status_message {
+        table.insert(
+            "status_message".to_string(),
+            codex_config::TomlValue::String(status_message.to_string()),
+        );
+    }
+    codex_config::version_for_toml(&codex_config::TomlValue::Table(table))
+}
 
 fn write_user_hook_config(codex_home: &std::path::Path) -> Result<()> {
     std::fs::write(
@@ -113,6 +157,15 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                 display_order: 0,
                 enabled: true,
                 is_managed: false,
+                current_hash: command_hook_hash(
+                    "pre_tool_use",
+                    Some("Bash"),
+                    "python3 /tmp/listed-hook.py",
+                    5,
+                    Some("running listed hook"),
+                ),
+                trusted_hash: None,
+                trust_status: HookTrustStatus::Untrusted,
             }],
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -183,6 +236,15 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
                 display_order: 0,
                 enabled: true,
                 is_managed: false,
+                current_hash: command_hook_hash(
+                    "pre_tool_use",
+                    Some("Bash"),
+                    "echo plugin hook",
+                    7,
+                    Some("running plugin hook"),
+                ),
+                trusted_hash: None,
+                trust_status: HookTrustStatus::Untrusted,
             }],
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -300,6 +362,15 @@ timeout = 5
                     display_order: 0,
                     enabled: true,
                     is_managed: false,
+                    current_hash: command_hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        "echo project hook",
+                        5,
+                        None,
+                    ),
+                    trusted_hash: None,
+                    trust_status: HookTrustStatus::Untrusted,
                 }],
                 warnings: Vec::new(),
                 errors: Vec::new(),

@@ -8,23 +8,26 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig;
+use codex_config::HookStateToml;
 use codex_config::HooksFile;
 use codex_config::ManagedHooksRequirementsToml;
 use codex_config::MatcherGroup;
 use codex_config::RequirementSource;
+use codex_config::TomlValue;
+use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use super::ConfiguredHandler;
 use super::HookListEntry;
-use crate::config_rules::disabled_hook_keys_from_stack;
+use crate::config_rules::hook_states_from_stack;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
+use codex_protocol::protocol::HookTrustStatus;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
@@ -36,7 +39,7 @@ struct HookHandlerSource<'a> {
     path: &'a AbsolutePathBuf,
     key_source: String,
     source: HookSource,
-    disabled_hook_keys: &'a HashSet<String>,
+    hook_states: &'a HashMap<String, HookStateToml>,
     env: HashMap<String, String>,
     plugin_id: Option<String>,
 }
@@ -50,7 +53,7 @@ pub(crate) fn discover_handlers(
     let mut hook_entries = Vec::new();
     let mut warnings = plugin_hook_load_warnings;
     let mut display_order = 0_i64;
-    let disabled_hook_keys = disabled_hook_keys_from_stack(config_layer_stack);
+    let hook_states = hook_states_from_stack(config_layer_stack);
 
     if let Some(config_layer_stack) = config_layer_stack {
         append_managed_requirement_handlers(
@@ -59,7 +62,7 @@ pub(crate) fn discover_handlers(
             &mut warnings,
             &mut display_order,
             config_layer_stack,
-            &disabled_hook_keys,
+            &hook_states,
         );
 
         for layer in config_layer_stack.get_layers(
@@ -92,7 +95,7 @@ pub(crate) fn discover_handlers(
                         path: &source_path,
                         key_source: source_path.display().to_string(),
                         source: hook_source,
-                        disabled_hook_keys: &disabled_hook_keys,
+                        hook_states: &hook_states,
                         env: HashMap::new(),
                         plugin_id: None,
                     },
@@ -108,7 +111,7 @@ pub(crate) fn discover_handlers(
         &mut warnings,
         &mut display_order,
         plugin_hook_sources,
-        &disabled_hook_keys,
+        &hook_states,
     );
 
     DiscoveryResult {
@@ -124,7 +127,7 @@ fn append_managed_requirement_handlers(
     warnings: &mut Vec<String>,
     display_order: &mut i64,
     config_layer_stack: &ConfigLayerStack,
-    disabled_hook_keys: &HashSet<String>,
+    hook_states: &HashMap<String, HookStateToml>,
 ) {
     let Some(managed_hooks) = config_layer_stack.requirements().managed_hooks.as_ref() else {
         return;
@@ -143,7 +146,7 @@ fn append_managed_requirement_handlers(
             path: &source_path,
             key_source: source_path.display().to_string(),
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
-            disabled_hook_keys,
+            hook_states,
             env: HashMap::new(),
             plugin_id: None,
         },
@@ -157,7 +160,7 @@ fn append_plugin_hook_sources(
     warnings: &mut Vec<String>,
     display_order: &mut i64,
     plugin_hook_sources: Vec<PluginHookSource>,
-    disabled_hook_keys: &HashSet<String>,
+    hook_states: &HashMap<String, HookStateToml>,
 ) {
     // TODO(abhinav): check enabled/trusted state here before plugin hooks become runnable.
     for source in plugin_hook_sources {
@@ -188,7 +191,7 @@ fn append_plugin_hook_sources(
                 path: &source_path,
                 key_source: format!("{plugin_id}:{source_relative_path}"),
                 source: HookSource::Plugin,
-                disabled_hook_keys,
+                hook_states,
                 env,
                 plugin_id: Some(plugin_id),
             },
@@ -396,10 +399,17 @@ fn append_matcher_groups(
                         ));
                         continue;
                     }
+                    let timeout_sec = timeout_sec.unwrap_or(600).max(1);
+                    let current_hash = command_hook_hash(
+                        event_name,
+                        matcher,
+                        &command,
+                        timeout_sec,
+                        status_message.as_deref(),
+                    );
                     let command = source.env.iter().fold(command, |command, (key, value)| {
                         command.replace(&format!("${{{key}}}"), value)
                     });
-                    let timeout_sec = timeout_sec.unwrap_or(600).max(1);
                     // TODO(abhinav): replace this positional suffix with a durable hook id.
                     let key = format!(
                         "{}:{}:{}:{}",
@@ -408,8 +418,14 @@ fn append_matcher_groups(
                         group_index,
                         handler_index
                     );
-                    let enabled =
-                        source.source.is_managed() || !source.disabled_hook_keys.contains(&key);
+                    let state = source.hook_states.get(&key);
+                    let enabled = source.source.is_managed()
+                        || state.and_then(|state| state.enabled) != Some(false);
+                    let trusted_hash = (!source.source.is_managed())
+                        .then(|| state.and_then(|state| state.trusted_hash.clone()))
+                        .flatten();
+                    let trust_status =
+                        hook_trust_status(source.source, &current_hash, trusted_hash.as_deref());
                     hook_entries.push(HookListEntry {
                         key,
                         event_name,
@@ -424,6 +440,9 @@ fn append_matcher_groups(
                         display_order: *display_order,
                         enabled,
                         is_managed: source.source.is_managed(),
+                        current_hash,
+                        trusted_hash,
+                        trust_status,
                     });
                     if enabled {
                         handlers.push(ConfiguredHandler {
@@ -450,6 +469,63 @@ fn append_matcher_groups(
                 )),
             }
         }
+    }
+}
+
+fn command_hook_hash(
+    event_name: codex_protocol::protocol::HookEventName,
+    matcher: Option<&str>,
+    command: &str,
+    timeout_sec: u64,
+    status_message: Option<&str>,
+) -> String {
+    let TomlValue::Table(mut table) = TomlValue::Table(Default::default()) else {
+        unreachable!("TOML table construction should stay a table");
+    };
+    table.insert(
+        "event_name".to_string(),
+        TomlValue::String(hook_event_key_label(event_name).to_string()),
+    );
+    if let Some(matcher) = matcher {
+        table.insert(
+            "matcher".to_string(),
+            TomlValue::String(matcher.to_string()),
+        );
+    }
+    table.insert(
+        "handler_type".to_string(),
+        TomlValue::String("command".to_string()),
+    );
+    table.insert(
+        "command".to_string(),
+        TomlValue::String(command.to_string()),
+    );
+    table.insert(
+        "timeout_sec".to_string(),
+        TomlValue::Integer(i64::try_from(timeout_sec).unwrap_or(i64::MAX)),
+    );
+    if let Some(status_message) = status_message {
+        table.insert(
+            "status_message".to_string(),
+            TomlValue::String(status_message.to_string()),
+        );
+    }
+    version_for_toml(&TomlValue::Table(table))
+}
+
+fn hook_trust_status(
+    source: HookSource,
+    current_hash: &str,
+    trusted_hash: Option<&str>,
+) -> HookTrustStatus {
+    if source.is_managed() {
+        return HookTrustStatus::Managed;
+    }
+
+    match trusted_hash {
+        Some(trusted_hash) if trusted_hash == current_hash => HookTrustStatus::Trusted,
+        Some(_) => HookTrustStatus::Changed,
+        None => HookTrustStatus::Untrusted,
     }
 }
 
@@ -508,6 +584,7 @@ mod tests {
     use super::ConfiguredHandler;
     use super::append_matcher_groups;
     use codex_config::HookHandlerConfig;
+    use codex_config::HookStateToml;
     use codex_config::MatcherGroup;
     use codex_config::TomlValue;
 
@@ -521,13 +598,13 @@ mod tests {
 
     fn hook_handler_source<'a>(
         path: &'a AbsolutePathBuf,
-        disabled_hook_keys: &'a std::collections::HashSet<String>,
+        hook_states: &'a std::collections::HashMap<String, HookStateToml>,
     ) -> super::HookHandlerSource<'a> {
         super::HookHandlerSource {
             path,
             key_source: path.display().to_string(),
             source: hook_source(),
-            disabled_hook_keys,
+            hook_states,
             env: std::collections::HashMap::new(),
             plugin_id: None,
         }
@@ -551,14 +628,14 @@ mod tests {
         let mut warnings = Vec::new();
         let mut display_order = 0;
         let source_path = source_path();
-        let disabled_hook_keys = std::collections::HashSet::new();
+        let hook_states = std::collections::HashMap::new();
 
         append_matcher_groups(
             &mut handlers,
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &disabled_hook_keys),
+            &hook_handler_source(&source_path, &hook_states),
             HookEventName::UserPromptSubmit,
             vec![command_group(Some("["))],
         );
@@ -586,14 +663,14 @@ mod tests {
         let mut warnings = Vec::new();
         let mut display_order = 0;
         let source_path = source_path();
-        let disabled_hook_keys = std::collections::HashSet::new();
+        let hook_states = std::collections::HashMap::new();
 
         append_matcher_groups(
             &mut handlers,
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &disabled_hook_keys),
+            &hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
             vec![command_group(Some("^Bash$"))],
         );
@@ -621,14 +698,14 @@ mod tests {
         let mut warnings = Vec::new();
         let mut display_order = 0;
         let source_path = source_path();
-        let disabled_hook_keys = std::collections::HashSet::new();
+        let hook_states = std::collections::HashMap::new();
 
         append_matcher_groups(
             &mut handlers,
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &disabled_hook_keys),
+            &hook_handler_source(&source_path, &hook_states),
             HookEventName::PreToolUse,
             vec![command_group(Some("*"))],
         );
@@ -644,14 +721,14 @@ mod tests {
         let mut warnings = Vec::new();
         let mut display_order = 0;
         let source_path = source_path();
-        let disabled_hook_keys = std::collections::HashSet::new();
+        let hook_states = std::collections::HashMap::new();
 
         append_matcher_groups(
             &mut handlers,
             &mut Vec::new(),
             &mut warnings,
             &mut display_order,
-            &hook_handler_source(&source_path, &disabled_hook_keys),
+            &hook_handler_source(&source_path, &hook_states),
             HookEventName::PostToolUse,
             vec![command_group(Some("Edit|Write"))],
         );
