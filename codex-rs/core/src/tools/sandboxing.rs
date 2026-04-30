@@ -139,6 +139,13 @@ pub(crate) struct PermissionRequestPayload {
 }
 
 impl PermissionRequestPayload {
+    pub(crate) fn new(tool_name: HookToolName, tool_input: serde_json::Value) -> Self {
+        Self {
+            tool_name,
+            tool_input,
+        }
+    }
+
     pub(crate) fn bash(command: String, description: Option<String>) -> Self {
         let mut tool_input = serde_json::Map::new();
         tool_input.insert("command".to_string(), serde_json::Value::String(command));
@@ -149,10 +156,7 @@ impl PermissionRequestPayload {
             );
         }
 
-        Self {
-            tool_name: HookToolName::bash(),
-            tool_input: serde_json::Value::Object(tool_input),
-        }
+        Self::new(HookToolName::bash(), serde_json::Value::Object(tool_input))
     }
 }
 

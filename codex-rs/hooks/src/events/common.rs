@@ -195,6 +195,14 @@ mod tests {
         assert!(matches_matcher(Some("Bash"), Some("Bash")));
         assert!(!matches_matcher(Some("Bash"), Some("BashOutput")));
         assert!(matches_matcher(
+            Some("dynamic__codex_app__automation_update"),
+            Some("dynamic__codex_app__automation_update")
+        ));
+        assert!(!matches_matcher(
+            Some("dynamic__codex_app"),
+            Some("dynamic__codex_app__automation_update")
+        ));
+        assert!(matches_matcher(
             Some("mcp__memory__create_entities"),
             Some("mcp__memory__create_entities")
         ));
@@ -226,6 +234,23 @@ mod tests {
             Some("mcp__filesystem__read_file")
         ));
         assert_eq!(validate_matcher_pattern("mcp__memory__.*"), Ok(()));
+    }
+
+    #[test]
+    fn dynamic_matchers_support_regex_wildcards() {
+        assert!(matches_matcher(
+            Some("dynamic__codex_app__.*"),
+            Some("dynamic__codex_app__automation_update")
+        ));
+        assert!(matches_matcher(
+            Some("dynamic__.*__automation_update"),
+            Some("dynamic__codex_app__automation_update")
+        ));
+        assert!(!matches_matcher(
+            Some("dynamic__other_app__.*"),
+            Some("dynamic__codex_app__automation_update")
+        ));
+        assert_eq!(validate_matcher_pattern("dynamic__codex_app__.*"), Ok(()));
     }
 
     #[test]

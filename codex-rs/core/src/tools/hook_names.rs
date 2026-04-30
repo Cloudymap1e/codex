@@ -5,6 +5,8 @@
 //! concepts together prevents handlers from accidentally serializing a
 //! compatibility alias, such as `Write`, as the stable hook payload name.
 
+use codex_tools::ToolName;
+
 /// Identifies a tool in hook payloads and hook matcher selection.
 ///
 /// `name` is the canonical value serialized into hook stdin. Matcher aliases are
@@ -22,6 +24,21 @@ impl HookToolName {
         Self {
             name: name.into(),
             matcher_aliases: Vec::new(),
+        }
+    }
+
+    /// Builds the canonical hook-facing identity for function-style tools that
+    /// do not need Claude-compatibility aliases.
+    ///
+    /// MCP tool names already use a stable fully qualified `mcp__...__tool`
+    /// form, so we preserve them verbatim. Other namespaced tools use the
+    /// `dynamic__namespace__tool` form so hooks can wildcard an entire dynamic
+    /// namespace without colliding with plain tool names.
+    pub(crate) fn for_function_tool(tool_name: &ToolName) -> Self {
+        match tool_name.namespace.as_deref() {
+            Some(namespace) if namespace.starts_with("mcp__") => Self::new(tool_name.display()),
+            Some(namespace) => Self::new(format!("dynamic__{namespace}__{}", tool_name.name)),
+            None => Self::new(tool_name.name.clone()),
         }
     }
 
@@ -51,5 +68,42 @@ impl HookToolName {
     /// Returns additional matcher inputs that should select the same handlers.
     pub(crate) fn matcher_aliases(&self) -> &[String] {
         &self.matcher_aliases
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HookToolName;
+    use codex_tools::ToolName;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn for_function_tool_keeps_plain_tool_names() {
+        assert_eq!(
+            HookToolName::for_function_tool(&ToolName::plain("tool_search")),
+            HookToolName::new("tool_search"),
+        );
+    }
+
+    #[test]
+    fn for_function_tool_keeps_mcp_names_stable() {
+        assert_eq!(
+            HookToolName::for_function_tool(&ToolName::namespaced(
+                "mcp__memory__",
+                "create_entities",
+            )),
+            HookToolName::new("mcp__memory__create_entities"),
+        );
+    }
+
+    #[test]
+    fn for_function_tool_prefixes_dynamic_namespaces() {
+        assert_eq!(
+            HookToolName::for_function_tool(&ToolName::namespaced(
+                "codex_app",
+                "automation_update",
+            )),
+            HookToolName::new("dynamic__codex_app__automation_update"),
+        );
     }
 }

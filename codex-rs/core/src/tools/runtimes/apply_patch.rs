@@ -197,10 +197,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &self,
         req: &ApplyPatchRequest,
     ) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: serde_json::json!({ "command": req.action.patch }),
-        })
+        Some(PermissionRequestPayload::new(
+            HookToolName::apply_patch(),
+            serde_json::json!({ "command": req.action.patch }),
+        ))
     }
 }
 

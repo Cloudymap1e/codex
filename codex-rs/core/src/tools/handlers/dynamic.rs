@@ -3,8 +3,12 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -25,6 +29,27 @@ impl ToolHandler for DynamicToolHandler {
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_input: dynamic_tool_input(invocation).ok()?,
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: dynamic_tool_input(invocation).ok()?,
+            tool_response: result
+                .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
+        })
     }
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
@@ -67,7 +92,34 @@ impl ToolHandler for DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(FunctionToolOutput::from_content(body, Some(success)))
+        Ok(FunctionToolOutput {
+            post_tool_use_response: Some(dynamic_tool_post_tool_use_response(&body)?),
+            body,
+            success: Some(success),
+        })
+    }
+}
+
+fn dynamic_tool_input(invocation: &ToolInvocation) -> Result<Value, FunctionCallError> {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "dynamic tool handler received unsupported payload".to_string(),
+        ));
+    };
+
+    parse_arguments(arguments)
+}
+
+fn dynamic_tool_post_tool_use_response(
+    body: &[FunctionCallOutputContentItem],
+) -> Result<Value, FunctionCallError> {
+    match body {
+        [FunctionCallOutputContentItem::InputText { text }] => Ok(Value::String(text.clone())),
+        _ => serde_json::to_value(body).map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize dynamic tool response for PostToolUse: {error}"
+            ))
+        }),
     }
 }
 
@@ -139,4 +191,123 @@ async fn request_dynamic_tool(
     session.send_event(turn_context, response_event).await;
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DynamicToolHandler;
+    use super::dynamic_tool_post_tool_use_response;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::FunctionToolOutput;
+    use crate::tools::context::ToolCallSource;
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::hook_names::HookToolName;
+    use crate::tools::registry::PostToolUsePayload;
+    use crate::tools::registry::PreToolUsePayload;
+    use crate::tools::registry::ToolHandler;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_tools::ToolName;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    async fn dynamic_invocation(
+        tool_name: ToolName,
+        arguments: serde_json::Value,
+    ) -> ToolInvocation {
+        let (session, turn) = make_session_and_context().await;
+        ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-dynamic".to_string(),
+            tool_name,
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: arguments.to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dynamic_pre_tool_use_payload_uses_plain_tool_name() {
+        let invocation =
+            dynamic_invocation(ToolName::plain("automation_update"), json!({"id": 1})).await;
+
+        assert_eq!(
+            DynamicToolHandler.pre_tool_use_payload(&invocation),
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::new("automation_update"),
+                tool_input: json!({ "id": 1 }),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_post_tool_use_payload_uses_namespaced_hook_name() {
+        let invocation = dynamic_invocation(
+            ToolName::namespaced("codex_app", "automation_update"),
+            json!({ "job": "sync" }),
+        )
+        .await;
+        let output = FunctionToolOutput {
+            body: vec![FunctionCallOutputContentItem::InputText {
+                text: "ok".to_string(),
+            }],
+            success: Some(true),
+            post_tool_use_response: Some(json!("ok")),
+        };
+
+        assert_eq!(
+            DynamicToolHandler.post_tool_use_payload(&invocation, &output),
+            Some(PostToolUsePayload {
+                tool_name: HookToolName::new("dynamic__codex_app__automation_update"),
+                tool_use_id: "call-dynamic".to_string(),
+                tool_input: json!({ "job": "sync" }),
+                tool_response: json!("ok"),
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_post_tool_use_response_uses_text_for_single_text_item() {
+        assert_eq!(
+            dynamic_tool_post_tool_use_response(&[FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }]),
+            Ok(json!("done"))
+        );
+    }
+
+    #[test]
+    fn dynamic_post_tool_use_response_uses_content_items_for_mixed_output() {
+        let response = dynamic_tool_post_tool_use_response(&[
+            FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "https://example.com/image.png".to_string(),
+                detail: None,
+            },
+        ])
+        .expect("serialize mixed dynamic tool output");
+
+        assert_eq!(
+            response,
+            json!([
+                {
+                    "type": "input_text",
+                    "text": "done",
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/image.png",
+                }
+            ])
+        );
+    }
 }

@@ -90,7 +90,7 @@ pub(crate) async fn handle_mcp_tool_call(
     call_id: String,
     server: String,
     tool_name: String,
-    hook_tool_name: String,
+    hook_tool_name: HookToolName,
     arguments: String,
 ) -> HandledMcpToolCall {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
@@ -193,7 +193,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context,
         &call_id,
         &invocation,
-        &hook_tool_name,
+        hook_tool_name.name(),
         metadata.as_ref(),
         approval_mode,
     )
@@ -956,13 +956,13 @@ async fn maybe_request_mcp_tool_approval(
         sess,
         turn_context,
         call_id,
-        PermissionRequestPayload {
-            tool_name: HookToolName::new(hook_tool_name),
-            tool_input: invocation
+        PermissionRequestPayload::new(
+            HookToolName::new(hook_tool_name),
+            invocation
                 .arguments
                 .clone()
                 .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
-        },
+        ),
     )
     .await
     {
