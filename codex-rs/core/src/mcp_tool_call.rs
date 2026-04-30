@@ -920,6 +920,7 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let mut monitor_reason = None;
+    let mut require_direct_user_approval = false;
     let auto_approved_by_policy = approval_mode == AppToolApproval::Approve;
 
     if auto_approved_by_policy {
@@ -937,12 +938,13 @@ async fn maybe_request_mcp_tool_approval(
                 monitor_reason = Some(reason);
             }
             ArcMonitorOutcome::SteerModel(reason) => {
-                if turn_context.session_source == SessionSource::Exec {
+                if !session_source_can_prompt_for_arc_steer_model(&turn_context.session_source) {
                     return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
                         arc_monitor_interrupt_message(&reason),
                     ));
                 }
                 monitor_reason = Some(reason);
+                require_direct_user_approval = true;
             }
         }
     }
@@ -971,7 +973,9 @@ async fn maybe_request_mcp_tool_approval(
     .await
     {
         Some(PermissionRequestDecision::Allow) => {
-            return Some(McpToolApprovalDecision::Accept);
+            if !require_direct_user_approval {
+                return Some(McpToolApprovalDecision::Accept);
+            }
         }
         Some(PermissionRequestDecision::Deny { message }) => {
             return Some(McpToolApprovalDecision::Decline {
@@ -986,7 +990,10 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if routes_approval_to_guardian(turn_context) {
+    // ARC SteerModel means an always-allowed tool call was escalated into a
+    // fresh consent check. Policy-level auto-approval mechanisms (hooks and
+    // guardian) must not satisfy that consent; only a direct user prompt can.
+    if routes_approval_to_guardian(turn_context) && !require_direct_user_approval {
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
@@ -1097,6 +1104,10 @@ async fn maybe_request_mcp_tool_approval(
     )
     .await;
     Some(decision)
+}
+
+fn session_source_can_prompt_for_arc_steer_model(session_source: &SessionSource) -> bool {
+    crate::INTERACTIVE_SESSION_SOURCES.contains(session_source)
 }
 
 async fn maybe_monitor_auto_approved_mcp_tool_call(
