@@ -3290,6 +3290,92 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 }
 
 #[tokio::test]
+async fn relative_cwd_update_with_turn_environment_resolves_under_turn_environment_cwd() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (stored_cwd, turn_environment_cwd, expected_cwd) = {
+        let mut state = session.state.lock().await;
+        let stored_cwd = state.session_configuration.cwd.clone();
+        let stored_environment_cwd = stored_cwd.join("stored-environment");
+        let turn_environment_cwd = stored_cwd.join("turn-environment");
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: stored_environment_cwd,
+        }];
+        let expected_cwd = turn_environment_cwd.join("project");
+        (stored_cwd, turn_environment_cwd, expected_cwd)
+    };
+    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(PathBuf::from("project")),
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: turn_environment_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        stored_cwd.join("stored-environment")
+    );
+    assert_eq!(turn_context.cwd, expected_cwd);
+    assert_eq!(
+        turn_context
+            .primary_environment()
+            .expect("primary environment")
+            .cwd,
+        expected_cwd
+    );
+}
+
+#[tokio::test]
+async fn relative_cwd_update_with_empty_turn_environments_resolves_under_session_cwd() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (stored_cwd, expected_cwd) = {
+        let mut state = session.state.lock().await;
+        let stored_cwd = state.session_configuration.cwd.clone();
+        state.session_configuration.environments = vec![TurnEnvironmentSelection {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: stored_cwd.join("stored-environment"),
+        }];
+        let expected_cwd = stored_cwd.join("project");
+        (stored_cwd, expected_cwd)
+    };
+    std::fs::create_dir_all(expected_cwd.as_path()).expect("create project dir");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(PathBuf::from("project")),
+                environments: Some(Vec::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, expected_cwd);
+    assert_eq!(
+        state.session_configuration.environments[0].cwd,
+        stored_cwd.join("stored-environment")
+    );
+    assert_eq!(turn_context.cwd, expected_cwd);
+    assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -4410,9 +4496,9 @@ async fn empty_turn_environments_clear_primary_environment() {
         .expect("turn should start");
 
     assert!(turn_context.primary_environment().is_none());
+    assert!(turn_context.environments.is_empty());
     assert_eq!(turn_context.cwd, session.get_config().await.cwd);
     assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
-    assert_eq!(turn_context.environments.len(), 0);
 }
 
 #[tokio::test]
