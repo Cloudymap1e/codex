@@ -6,6 +6,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -163,6 +165,120 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         !archived_path.exists(),
         "expected archived rollout path {archived_path_display} to be moved"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_unarchive_of_loaded_archived_thread_allows_resume_from_restored_path() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let rollout_path = thread.path.clone().expect("thread path");
+
+    let turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_start_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let archive_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
+    )
+    .await??;
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
+
+    let archived_path = find_archived_thread_path_by_id_str(codex_home.path(), &thread.id)
+        .await?
+        .expect("expected archived rollout path for thread id to exist");
+    let archived_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            path: Some(archived_path.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let archived_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archived_resume_id)),
+    )
+    .await??;
+    let archived_resume: ThreadResumeResponse =
+        to_response::<ThreadResumeResponse>(archived_resume_resp)?;
+    assert_eq!(archived_resume.thread.path, Some(archived_path.clone()));
+
+    let unarchive_id = mcp
+        .send_thread_unarchive_request(ThreadUnarchiveParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let unarchive_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unarchive_id)),
+    )
+    .await??;
+    let _: ThreadUnarchiveResponse = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/unarchived"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+
+    let restored_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            path: Some(rollout_path.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let restored_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(restored_resume_id)),
+    )
+    .await??;
+    let restored_resume: ThreadResumeResponse =
+        to_response::<ThreadResumeResponse>(restored_resume_resp)?;
+    assert_eq!(restored_resume.thread.path, Some(rollout_path));
 
     Ok(())
 }

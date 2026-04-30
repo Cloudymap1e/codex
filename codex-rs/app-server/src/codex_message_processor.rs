@@ -3553,6 +3553,20 @@ impl CodexMessageProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
+        if self
+            .thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .is_ok_and(|thread| thread.archived_at.is_some())
+        {
+            self.prepare_thread_for_rollout_move(thread_id, "unarchive")
+                .await;
+        }
+
         let fallback_provider = self.config.model_provider_id.clone();
         let mut thread = self
             .thread_store
@@ -5985,19 +5999,24 @@ impl CodexMessageProcessor {
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
+        self.prepare_thread_for_rollout_move(thread_id, "archive")
+            .await;
+    }
+
+    async fn prepare_thread_for_rollout_move(&self, thread_id: ThreadId, operation: &str) {
         // If the thread is active, request shutdown and wait briefly.
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
-            info!("thread {thread_id} was active; shutting down");
+            info!("thread {thread_id} was active; shutting down before {operation}");
             match Self::wait_for_thread_shutdown(&conversation).await {
                 ThreadShutdownResult::Complete => {}
                 ThreadShutdownResult::SubmitFailed => {
                     error!(
-                        "failed to submit Shutdown to thread {thread_id}; proceeding with archive"
+                        "failed to submit Shutdown to thread {thread_id}; proceeding with {operation}"
                     );
                 }
                 ThreadShutdownResult::TimedOut => {
-                    warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                    warn!("thread {thread_id} shutdown timed out; proceeding with {operation}");
                 }
             }
         }
