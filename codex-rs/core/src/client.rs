@@ -105,6 +105,8 @@ use tracing::warn;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::devicecheck::X_OAI_ATTESTATION_HEADER;
+use crate::devicecheck::macos_devicecheck_header;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
@@ -701,7 +703,8 @@ impl ModelClient {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
+        let headers =
+            self.build_websocket_headers(&api_provider, turn_state.as_ref(), turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context,
@@ -780,6 +783,7 @@ impl ModelClient {
     /// replayed on reconnect within the same turn.
     fn build_websocket_headers(
         &self,
+        provider: &codex_api::Provider,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
@@ -795,6 +799,7 @@ impl ModelClient {
         }
         headers.extend(build_conversation_headers(Some(conversation_id)));
         headers.extend(self.build_responses_identity_headers());
+        extend_devicecheck_header_for_responses_endpoint(&mut headers, provider);
         headers.insert(
             OPENAI_BETA_HEADER,
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
@@ -909,6 +914,7 @@ impl ModelClientSession {
     /// regardless of transport choice.
     fn build_responses_options(
         &self,
+        provider: &codex_api::Provider,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
@@ -924,6 +930,7 @@ impl ModelClientSession {
                     turn_metadata_header.as_ref(),
                 );
                 headers.extend(self.client.build_responses_identity_headers());
+                extend_devicecheck_header_for_responses_endpoint(&mut headers, provider);
                 headers
             },
             compression,
@@ -1200,8 +1207,11 @@ impl ModelClientSession {
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
-            let options = self.build_responses_options(turn_metadata_header, compression);
-
+            let options = self.build_responses_options(
+                &client_setup.api_provider,
+                turn_metadata_header,
+                compression,
+            );
             let request = self.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -1295,7 +1305,11 @@ impl ModelClientSession {
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
-            let options = self.build_responses_options(turn_metadata_header, compression);
+            let options = self.build_responses_options(
+                &client_setup.api_provider,
+                turn_metadata_header,
+                compression,
+            );
             let request = self.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -1591,6 +1605,24 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
+}
+
+fn provider_base_url_is_chatgpt_codex(provider: &codex_api::Provider) -> bool {
+    provider
+        .base_url
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case("https://chatgpt.com/backend-api/codex")
+}
+
+fn extend_devicecheck_header_for_responses_endpoint(
+    headers: &mut ApiHeaderMap,
+    provider: &codex_api::Provider,
+) {
+    if provider_base_url_is_chatgpt_codex(provider)
+        && let Some(header_value) = macos_devicecheck_header()
+    {
+        headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+    }
 }
 
 fn subagent_header_value(session_source: &SessionSource) -> Option<String> {

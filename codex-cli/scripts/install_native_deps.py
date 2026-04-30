@@ -42,6 +42,15 @@ class BinaryComponent:
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
+APPLE_SILICON_TARGETS = ("aarch64-apple-darwin",)
+
+
+@dataclass(frozen=True)
+class ArchiveComponent:
+    artifact_prefix: str
+    dest_dir: str
+    archive_member: str
+    targets: tuple[str, ...]
 
 BINARY_COMPONENTS = {
     "codex": BinaryComponent(
@@ -65,6 +74,15 @@ BINARY_COMPONENTS = {
         dest_dir="codex",
         binary_basename="codex-command-runner",
         targets=WINDOWS_TARGETS,
+    ),
+}
+
+ARCHIVE_COMPONENTS = {
+    "devicecheck-probe": ArchiveComponent(
+        artifact_prefix="devicecheck-probe",
+        dest_dir="devicecheck-probe",
+        archive_member="devicecheck-probe",
+        targets=APPLE_SILICON_TARGETS,
     ),
 }
 
@@ -132,7 +150,7 @@ def parse_args() -> argparse.Namespace:
         "--component",
         dest="components",
         action="append",
-        choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
+        choices=tuple(list(BINARY_COMPONENTS) + list(ARCHIVE_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
             " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
@@ -180,6 +198,11 @@ def main() -> int:
                 artifacts_dir,
                 vendor_dir,
                 [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+            )
+            install_archive_components(
+                artifacts_dir,
+                vendor_dir,
+                [ARCHIVE_COMPONENTS[name] for name in components if name in ARCHIVE_COMPONENTS],
             )
 
     if "rg" in components:
@@ -335,6 +358,45 @@ def _archive_name_for_target(artifact_prefix: str, target: str) -> str:
     if "windows" in target:
         return f"{artifact_prefix}-{target}.exe.zst"
     return f"{artifact_prefix}-{target}.zst"
+
+
+def install_archive_components(
+    artifacts_dir: Path,
+    vendor_dir: Path,
+    selected_components: Sequence[ArchiveComponent],
+) -> None:
+    if not selected_components:
+        return
+
+    for component in selected_components:
+        for target in component.targets:
+            archive_path = artifacts_dir / target / f"{component.artifact_prefix}-{target}.tar.gz"
+            if not archive_path.exists():
+                raise FileNotFoundError(f"Expected artifact not found: {archive_path}")
+
+            dest_dir = vendor_dir / target
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            extract_archive_tree(archive_path, component.archive_member, dest_dir / component.dest_dir)
+            print(f"  installed {dest_dir / component.dest_dir}")
+
+
+def extract_archive_tree(archive_path: Path, archive_member: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="codex-archive-tree-") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        with tarfile.open(archive_path, "r:gz") as tar:
+            members = [
+                member
+                for member in tar.getmembers()
+                if member.name == archive_member or member.name.startswith(f"{archive_member}/")
+            ]
+            if not members:
+                raise RuntimeError(f"Entry '{archive_member}' not found in archive {archive_path}.")
+            tar.extractall(path=tmp_dir, members=members, filter="data")
+        extracted = tmp_dir / archive_member
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.move(str(extracted), dest)
 
 
 def _fetch_single_rg(

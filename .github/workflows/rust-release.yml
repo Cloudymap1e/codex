@@ -70,24 +70,28 @@ jobs:
             bundle: primary
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
+            app_bundles: "DeviceCheckProbe.app"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
             binaries: "codex-app-server"
+            app_bundles: ""
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
+            app_bundles: ""
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
             binaries: "codex-app-server"
+            app_bundles: ""
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
@@ -263,6 +267,15 @@ jobs:
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
           cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
+      - if: ${{ runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin' && matrix.bundle == 'primary' }}
+        name: Build macOS DeviceCheck probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./devicecheck-probe/build-probe.sh \
+            --target "${{ matrix.target }}" \
+            --out "target/${{ matrix.target }}/release"
+
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
@@ -284,6 +297,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           binaries: ${{ matrix.binaries }}
+          app-bundles: ${{ matrix.app_bundles }}
           sign-binaries: "true"
           sign-dmg: "false"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -318,6 +332,12 @@ jobs:
             fi
             ditto "${binary_path}" "${dmg_root}/${binary}"
           done
+
+          if [[ -d "${release_dir}/DeviceCheckProbe.app" ]]; then
+            mkdir -p "${dmg_root}/devicecheck-probe"
+            ditto "${release_dir}/DeviceCheckProbe.app" \
+              "${dmg_root}/devicecheck-probe/DeviceCheckProbe.app"
+          fi
 
           rm -f "$dmg_path"
           hdiutil create \
@@ -359,6 +379,14 @@ jobs:
             fi
           done
 
+          if [[ -d "target/${{ matrix.target }}/release/DeviceCheckProbe.app" ]]; then
+            mkdir -p "$dest/devicecheck-probe"
+            ditto "target/${{ matrix.target }}/release/DeviceCheckProbe.app" \
+              "$dest/devicecheck-probe/DeviceCheckProbe.app"
+            COPYFILE_DISABLE=1 tar -C "$dest" -czf "$dest/devicecheck-probe-${{ matrix.target }}.tar.gz" \
+              devicecheck-probe
+          fi
+
           if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
@@ -380,6 +408,9 @@ jobs:
           #    run `zstd --rm`, because that flag deletes the original files.
           for f in "$dest"/*; do
             base="$(basename "$f")"
+            if [[ -d "$f" ]]; then
+              continue
+            fi
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
             if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
@@ -392,7 +423,11 @@ jobs:
             fi
 
             # Create per-binary tar.gz
-            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            if [[ "$base" == "codex-aarch64-apple-darwin" && -d "$dest/devicecheck-probe" ]]; then
+              COPYFILE_DISABLE=1 tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base" devicecheck-probe
+            else
+              COPYFILE_DISABLE=1 tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            fi
 
             # Also create .zst and remove the uncompressed binaries to keep
             # non-Windows artifact directories small.

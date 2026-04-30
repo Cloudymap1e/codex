@@ -72,7 +72,7 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-linux-x64": ["codex", "rg"],
     "codex-linux-arm64": ["codex", "rg"],
     "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg"],
+    "codex-darwin-arm64": ["codex", "devicecheck-probe", "rg"],
     "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
@@ -91,6 +91,7 @@ COMPONENT_DEST_DIR: dict[str, str] = {
     "codex-responses-api-proxy": "codex-responses-api-proxy",
     "codex-windows-sandbox-setup": "codex",
     "codex-command-runner": "codex",
+    "devicecheck-probe": "devicecheck-probe",
     "rg": "path",
 }
 

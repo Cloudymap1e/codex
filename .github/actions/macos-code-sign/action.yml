@@ -7,6 +7,10 @@ inputs:
   binaries:
     description: Space-delimited binary basenames to sign and notarize.
     default: "codex codex-responses-api-proxy"
+  app-bundles:
+    description: Space-delimited macOS app bundle basenames to sign and notarize.
+    required: false
+    default: ""
   sign-binaries:
     description: Whether to sign and notarize the macOS binaries.
     required: false
@@ -123,6 +127,7 @@ runs:
       env:
         TARGET: ${{ inputs.target }}
         BINARIES: ${{ inputs.binaries }}
+        APP_BUNDLES: ${{ inputs.app-bundles }}
       run: |
         set -euo pipefail
 
@@ -143,12 +148,18 @@ runs:
           codesign --force --options runtime --timestamp --entitlements "$entitlements_path" --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
         done
 
+        for app_bundle in ${APP_BUNDLES}; do
+          path="codex-rs/target/${TARGET}/release/${app_bundle}"
+          codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
+        done
+
     - name: Notarize macOS binaries
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
         BINARIES: ${{ inputs.binaries }}
+        APP_BUNDLES: ${{ inputs.app-bundles }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
@@ -189,6 +200,26 @@ runs:
 
         for binary in ${BINARIES}; do
           notarize_binary "${binary}"
+        done
+
+        notarize_app_bundle() {
+          local app_bundle="$1"
+          local source_path="codex-rs/target/${TARGET}/release/${app_bundle}"
+          local archive_path="${RUNNER_TEMP}/${app_bundle}.zip"
+
+          if [[ ! -d "$source_path" ]]; then
+            echo "App bundle $source_path not found"
+            exit 1
+          fi
+
+          rm -f "$archive_path"
+          ditto -c -k --keepParent "$source_path" "$archive_path"
+
+          notarize_submission "$app_bundle" "$archive_path" "$notary_key_path"
+        }
+
+        for app_bundle in ${APP_BUNDLES}; do
+          notarize_app_bundle "${app_bundle}"
         done
 
     - name: Sign and notarize macOS dmg
