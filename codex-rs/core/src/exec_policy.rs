@@ -594,10 +594,6 @@ pub fn render_decision_for_unmatched_command(
     sandbox_permissions: SandboxPermissions,
     used_complex_parsing: bool,
 ) -> Decision {
-    if is_known_safe_command(command) && !used_complex_parsing {
-        return Decision::Allow;
-    }
-
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
     let environment_lacks_sandbox_protections = cfg!(windows)
@@ -606,6 +602,14 @@ pub fn render_decision_for_unmatched_command(
             file_system_sandbox_policy,
             sandbox_cwd,
         );
+
+    if is_known_safe_command(command)
+        && !used_complex_parsing
+        && (approval_policy == AskForApproval::UnlessTrusted
+            || environment_lacks_sandbox_protections)
+    {
+        return Decision::Allow;
+    }
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without approval.
