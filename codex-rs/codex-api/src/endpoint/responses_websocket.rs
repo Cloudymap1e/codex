@@ -218,6 +218,7 @@ impl ResponsesWebsocketConnection {
         request: ResponsesWsRequest,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        detect_degraded_responses: bool,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -266,6 +267,7 @@ impl ResponsesWebsocketConnection {
                         telemetry,
                         connection_reused,
                         turn_state.as_deref(),
+                        detect_degraded_responses,
                     )
                     .await
                 };
@@ -634,6 +636,7 @@ async fn run_websocket_response_stream(
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
     turn_state: Option<&OnceLock<String>>,
+    detect_degraded_responses: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
@@ -745,7 +748,7 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                match process_responses_event(event) {
+                match process_responses_event(event, detect_degraded_responses) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;

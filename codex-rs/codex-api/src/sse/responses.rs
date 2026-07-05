@@ -37,6 +37,7 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    detect_degraded_responses: bool,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -90,6 +91,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            detect_degraded_responses,
         )
         .await;
     });
@@ -322,6 +324,7 @@ impl ResponsesEventError {
 
 pub fn process_responses_event(
     event: ResponsesStreamEvent,
+    detect_degraded_responses: bool,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
         "response.output_item.done" => {
@@ -419,14 +422,16 @@ pub fn process_responses_event(
             if let Some(resp_val) = event.response {
                 match serde_json::from_value::<ResponseCompleted>(resp_val) {
                     Ok(resp) => {
-                        if let Some(reasoning_output_tokens) = resp
-                            .usage
-                            .as_ref()
-                            .and_then(ResponseCompletedUsage::degraded_reasoning_output_tokens)
-                        {
-                            return Err(ResponsesEventError::Api(ApiError::DegradedResponse {
-                                reasoning_output_tokens,
-                            }));
+                        if detect_degraded_responses {
+                            if let Some(reasoning_output_tokens) = resp
+                                .usage
+                                .as_ref()
+                                .and_then(ResponseCompletedUsage::degraded_reasoning_output_tokens)
+                            {
+                                return Err(ResponsesEventError::Api(ApiError::DegradedResponse {
+                                    reasoning_output_tokens,
+                                }));
+                            }
                         }
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
@@ -471,6 +476,7 @@ pub async fn process_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    detect_degraded_responses: bool,
 ) {
     process_sse_with_treatment(
         stream,
@@ -478,6 +484,7 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        detect_degraded_responses,
     )
     .await;
 }
@@ -488,6 +495,7 @@ async fn process_sse_with_treatment(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    detect_degraded_responses: bool,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -573,7 +581,7 @@ async fn process_sse_with_treatment(
             return;
         }
 
-        match process_responses_event(event) {
+        match process_responses_event(event, detect_degraded_responses) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
@@ -695,6 +703,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*detect_degraded_responses*/ true,
         ));
 
         let mut events = Vec::new();
@@ -726,6 +735,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*detect_degraded_responses*/ true,
         ));
 
         let mut out = Vec::new();
@@ -865,6 +875,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_degraded_completed_reasoning_token_signatures_when_detection_disabled() {
+        for reasoning_output_tokens in [516, 1034, 1552] {
+            let completed = ResponsesStreamEvent {
+                kind: "response.completed".to_string(),
+                headers: None,
+                metadata: None,
+                response: Some(json!({
+                    "id": format!("resp-{reasoning_output_tokens}"),
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": null,
+                        "output_tokens": 20,
+                        "output_tokens_details": {"reasoning_tokens": reasoning_output_tokens},
+                        "total_tokens": 30
+                    }
+                })),
+                item: None,
+                item_id: None,
+                call_id: None,
+                delta: None,
+                summary_index: None,
+                content_index: None,
+                safety_buffering: None,
+            };
+
+            assert_matches!(
+                process_responses_event(completed, /*detect_degraded_responses*/ false),
+                Ok(Some(ResponseEvent::Completed { .. }))
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn ignores_non_degraded_completed_reasoning_token_counts() {
         for reasoning_output_tokens in [0, 515, 517, 1033, 1035, 1551, 1553] {
             let completed = json!({
@@ -976,6 +1019,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*detect_degraded_responses*/ true,
         ));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
@@ -1222,6 +1266,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            /*detect_degraded_responses*/ false,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1262,6 +1307,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            /*detect_degraded_responses*/ false,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {

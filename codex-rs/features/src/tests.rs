@@ -199,6 +199,19 @@ fn network_proxy_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
+fn degraded_response_retry_is_experimental_and_disabled_by_default() {
+    assert_eq!(
+        feature_for_key("degraded_response_retry"),
+        Some(Feature::DegradedResponseRetry)
+    );
+    assert!(matches!(
+        Feature::DegradedResponseRetry.stage(),
+        Stage::Experimental { .. }
+    ));
+    assert_eq!(Feature::DegradedResponseRetry.default_enabled(), false);
+}
+
+#[test]
 fn tool_search_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
     assert_eq!(Feature::ToolSearch.default_enabled(), false);

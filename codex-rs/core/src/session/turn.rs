@@ -2042,7 +2042,7 @@ async fn try_run_sampling_request(
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
-        .stream(
+        .stream_with_degraded_response_detection(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
@@ -2051,6 +2051,10 @@ async fn try_run_sampling_request(
             turn_context.config.service_tier.clone(),
             responses_metadata,
             &inference_trace,
+            turn_context
+                .config
+                .features
+                .enabled(Feature::DegradedResponseRetry),
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

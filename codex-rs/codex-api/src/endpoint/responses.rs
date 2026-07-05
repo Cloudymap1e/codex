@@ -36,6 +36,7 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    pub detect_degraded_responses: bool,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -79,6 +80,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             extra_headers,
             compression,
             turn_state,
+            detect_degraded_responses,
         } = options;
 
         let body = EncodedJsonBody::encode(&request)
@@ -93,8 +95,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream_encoded(body, headers, compression, turn_state)
-            .await
+        self.stream_encoded(
+            body,
+            headers,
+            compression,
+            turn_state,
+            detect_degraded_responses,
+        )
+        .await
     }
 
     fn path() -> &'static str {
@@ -121,8 +129,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Result<ResponseStream, ApiError> {
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        self.stream_encoded(body, extra_headers, compression, turn_state)
-            .await
+        self.stream_encoded(
+            body,
+            extra_headers,
+            compression,
+            turn_state,
+            /*detect_degraded_responses*/ false,
+        )
+        .await
     }
 
     async fn stream_encoded(
@@ -131,6 +145,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        detect_degraded_responses: bool,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
@@ -159,6 +174,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            detect_degraded_responses,
         ))
     }
 }

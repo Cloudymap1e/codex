@@ -132,6 +132,8 @@ pub enum Feature {
     DeferredExecutor,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
+    /// Retry responses that match the known degraded reasoning-token signature.
+    DegradedResponseRetry,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Compress cold local thread-store rollout files.
@@ -910,6 +912,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DegradedResponseRetry,
+        key: "degraded_response_retry",
+        stage: Stage::Experimental {
+            name: "Degraded response retry",
+            menu_description: "Retry model responses that match a known degraded reasoning-token signature.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

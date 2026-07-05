@@ -1,3 +1,4 @@
+use codex_features::Feature;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
@@ -111,6 +112,41 @@ where
 }
 
 #[test]
+fn accepts_degraded_reasoning_response_when_feature_disabled() -> anyhow::Result<()> {
+    run_async_test_on_large_stack(|| async {
+        let server = MockServer::start().await;
+        let response_mock = responses::mount_sse_sequence(
+            &server,
+            vec![responses::sse(vec![
+                responses::ev_response_created("resp-default-off"),
+                responses::ev_assistant_message("msg-default-off", "accepted answer"),
+                ev_completed_with_reasoning_tokens("resp-default-off", 516),
+            ])],
+        )
+        .await;
+        let test = test_codex()
+            .with_config(|config| {
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(0);
+            })
+            .build(&server)
+            .await?;
+
+        let agent_output = submit_turn_collecting_agent_output(&test, "answer normally").await?;
+
+        let requests = response_mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].body_contains_text("automatic recovery retry attempt"));
+        assert_eq!(
+            agent_output.completed_messages,
+            vec!["accepted answer".to_string()]
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
 fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<()> {
     run_async_test_on_large_stack(|| async {
         let server = MockServer::start().await;
@@ -136,6 +172,7 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
             .with_config(|config| {
                 config.model_provider.request_max_retries = Some(0);
                 config.model_provider.stream_max_retries = Some(0);
+                let _ = config.features.enable(Feature::DegradedResponseRetry);
             })
             .build(&server)
             .await?;
@@ -234,6 +271,7 @@ fn discards_streamed_degraded_assistant_output_before_retry() -> anyhow::Result<
             .with_config(|config| {
                 config.model_provider.request_max_retries = Some(0);
                 config.model_provider.stream_max_retries = Some(0);
+                let _ = config.features.enable(Feature::DegradedResponseRetry);
             })
             .build(&server)
             .await?;

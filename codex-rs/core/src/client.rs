@@ -1097,6 +1097,7 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         compression: Compression,
         use_responses_lite: bool,
+        detect_degraded_responses: bool,
     ) -> ApiResponsesOptions {
         ApiResponsesOptions {
             session_id: Some(responses_metadata.session_id.to_string()),
@@ -1120,6 +1121,7 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
+            detect_degraded_responses,
         }
     }
 
@@ -1358,6 +1360,7 @@ impl ModelClientSession {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
+        detect_degraded_responses: bool,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
         let mut auth_recovery = auth_manager
@@ -1385,6 +1388,7 @@ impl ModelClientSession {
                     responses_metadata,
                     compression,
                     model_info.use_responses_lite,
+                    detect_degraded_responses,
                 )
                 .await;
 
@@ -1486,6 +1490,7 @@ impl ModelClientSession {
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
+        detect_degraded_responses: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.provider.auth_manager();
 
@@ -1604,6 +1609,7 @@ impl ModelClientSession {
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
+                    detect_degraded_responses,
                 )
                 .await
                 .map_err(|err| {
@@ -1694,6 +1700,7 @@ impl ModelClientSession {
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,
+                /*detect_degraded_responses*/ false,
             )
             .await
         {
@@ -1736,6 +1743,33 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
+        self.stream_with_degraded_response_detection(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            inference_trace,
+            /*detect_degraded_responses*/ false,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn stream_with_degraded_response_detection(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        inference_trace: &InferenceTraceContext,
+        detect_degraded_responses: bool,
+    ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -1753,6 +1787,7 @@ impl ModelClientSession {
                             /*warmup*/ false,
                             request_trace,
                             inference_trace,
+                            detect_degraded_responses,
                         )
                         .await?
                     {
@@ -1772,6 +1807,7 @@ impl ModelClientSession {
                     service_tier,
                     responses_metadata,
                     inference_trace,
+                    detect_degraded_responses,
                 )
                 .await
             }

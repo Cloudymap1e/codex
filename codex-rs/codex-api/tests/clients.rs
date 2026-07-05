@@ -545,6 +545,7 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
                 extra_headers,
                 compression: Compression::None,
                 turn_state: None,
+                detect_degraded_responses: false,
             },
         )
         .await?;
