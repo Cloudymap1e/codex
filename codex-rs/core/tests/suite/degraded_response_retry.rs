@@ -115,11 +115,14 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
     run_async_test_on_large_stack(|| async {
         let server = MockServer::start().await;
         let mut response_bodies = Vec::new();
-        for attempt in 1..=2 {
+        for (attempt, reasoning_tokens) in [(1, 516), (2, 1034)] {
             response_bodies.push(responses::sse(vec![
                 responses::ev_response_created(&format!("resp-bad-{attempt}")),
                 responses::ev_assistant_message(&format!("msg-bad-{attempt}"), "bad answer"),
-                ev_completed_with_reasoning_tokens(&format!("resp-bad-{attempt}"), 516),
+                ev_completed_with_reasoning_tokens(
+                    &format!("resp-bad-{attempt}"),
+                    reasoning_tokens,
+                ),
             ]));
         }
         response_bodies.push(responses::sse(vec![
@@ -146,13 +149,16 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
             vec!["good answer".to_string()]
         );
         for (retry_attempt, request) in requests.iter().enumerate().skip(1) {
+            let expected_reasoning_tokens = if retry_attempt == 1 { 516 } else { 1034 };
             assert!(request.body_contains_text("answer carefully"));
             assert!(
                 request.body_contains_text("automatic recovery retry attempt"),
                 "retry request should include the recovery retry prompt"
             );
             assert!(
-                request.body_contains_text("known degraded reasoning-token signature 516"),
+                request.body_contains_text(&format!(
+                    "known degraded reasoning-token signature {expected_reasoning_tokens}"
+                )),
                 "retry request should explain the degraded reasoning-token signature"
             );
             assert!(
@@ -161,9 +167,9 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
                 "retry request should include the retry attempt"
             );
             assert!(
-                request.body_contains_text(
-                    "Avoid repeating the last bad reasoning-token signature 516"
-                ),
+                request.body_contains_text(&format!(
+                    "Avoid repeating the last bad reasoning-token signature {expected_reasoning_tokens}"
+                )),
                 "retry request should explicitly block repeating the bad signature"
             );
             assert!(

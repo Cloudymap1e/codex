@@ -51,6 +51,23 @@ fn with_now_override<T>(now: DateTime<Utc>, f: impl FnOnce() -> T) -> T {
 }
 
 #[test]
+fn degraded_response_reasoning_token_count_matches_518n_minus_2() {
+    for reasoning_output_tokens in [516, 1034, 1552, 2070] {
+        assert!(
+            is_degraded_response_reasoning_token_count(reasoning_output_tokens),
+            "{reasoning_output_tokens} should match 518*n - 2"
+        );
+    }
+
+    for reasoning_output_tokens in [-2, 0, 515, 517, 1033, 1035, 1551, 1553] {
+        assert!(
+            !is_degraded_response_reasoning_token_count(reasoning_output_tokens),
+            "{reasoning_output_tokens} should not match 518*n - 2 for positive n"
+        );
+    }
+}
+
+#[test]
 fn usage_limit_reached_error_formats_plus_plan() {
     let err = UsageLimitReachedError {
         plan_type: Some(PlanType::Known(KnownPlan::Plus)),

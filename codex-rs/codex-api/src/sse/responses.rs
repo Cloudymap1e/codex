@@ -835,7 +835,7 @@ mod tests {
 
     #[tokio::test]
     async fn detects_degraded_completed_reasoning_token_signatures() {
-        for reasoning_output_tokens in [516] {
+        for reasoning_output_tokens in [516, 1034, 1552] {
             let completed = json!({
                 "type": "response.completed",
                 "response": {
@@ -861,6 +861,32 @@ mod tests {
                     reasoning_output_tokens: actual_reasoning_output_tokens
                 }) if *actual_reasoning_output_tokens == reasoning_output_tokens
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn ignores_non_degraded_completed_reasoning_token_counts() {
+        for reasoning_output_tokens in [0, 515, 517, 1033, 1035, 1551, 1553] {
+            let completed = json!({
+                "type": "response.completed",
+                "response": {
+                    "id": format!("resp-{reasoning_output_tokens}"),
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": null,
+                        "output_tokens": 20,
+                        "output_tokens_details": {"reasoning_tokens": reasoning_output_tokens},
+                        "total_tokens": 30
+                    }
+                }
+            })
+            .to_string();
+
+            let sse = format!("event: response.completed\ndata: {completed}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+
+            assert_eq!(events.len(), 1);
+            assert_matches!(&events[0], Ok(ResponseEvent::Completed { .. }));
         }
     }
 

@@ -29,10 +29,13 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 /// Limit UI error messages to a reasonable size while keeping useful context.
 const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024;
 
-const DEGRADED_RESPONSE_REASONING_TOKEN_COUNT: i64 = 516;
+const DEGRADED_RESPONSE_REASONING_TOKEN_REMAINDER: i64 = 516;
+const DEGRADED_RESPONSE_REASONING_TOKEN_PERIOD: i64 = 518;
 
 pub fn is_degraded_response_reasoning_token_count(reasoning_output_tokens: i64) -> bool {
-    reasoning_output_tokens == DEGRADED_RESPONSE_REASONING_TOKEN_COUNT
+    reasoning_output_tokens > 0
+        && reasoning_output_tokens % DEGRADED_RESPONSE_REASONING_TOKEN_PERIOD
+            == DEGRADED_RESPONSE_REASONING_TOKEN_REMAINDER
 }
 
 #[derive(Error, Debug)]
