@@ -43,6 +43,9 @@ impl ContextualUserFragment for DegradedResponseRetryInstructions {
              {} of {}.\n\
              Retry the user's request from scratch and produce a complete, verified answer.\n\
              Recovery requirements:\n\
+             - Use the maximum available reasoning effort for this retry.\n\
+             - Stop being lazy: do not deliver incomplete, low-effort, placeholder, degraded, or shit work.\n\
+             - Do not intentionally or accidentally repeat the degraded response pattern.\n\
              - Use a different reasoning strategy than the discarded response.\n\
              - Verify the answer is complete before responding.\n\
              - Avoid repeating the last bad reasoning-token signature {}.\n\

@@ -156,6 +156,22 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
                 "retry request should include the recovery retry prompt"
             );
             assert!(
+                request.body_contains_text("Use the maximum available reasoning effort"),
+                "retry request should require maximum available reasoning effort"
+            );
+            assert!(
+                request.body_contains_text(
+                    "do not deliver incomplete, low-effort, placeholder, degraded, or shit work"
+                ),
+                "retry request should explicitly reject lazy or degraded work"
+            );
+            assert!(
+                request.body_contains_text(
+                    "Do not intentionally or accidentally repeat the degraded response pattern"
+                ),
+                "retry request should explicitly block repeating the degraded pattern"
+            );
+            assert!(
                 request.body_contains_text(&format!(
                     "known degraded reasoning-token signature {expected_reasoning_tokens}"
                 )),
