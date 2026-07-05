@@ -156,8 +156,8 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
                 "retry request should include the recovery retry prompt"
             );
             assert!(
-                request.body_contains_text("Use the maximum available reasoning effort"),
-                "retry request should require maximum available reasoning effort"
+                request.body_contains_text("Maximize your reasoning effort before answering"),
+                "retry request should require maximized reasoning effort"
             );
             assert!(
                 request.body_contains_text(
@@ -167,9 +167,15 @@ fn retries_degraded_reasoning_response_with_stronger_prompt() -> anyhow::Result<
             );
             assert!(
                 request.body_contains_text(
-                    "Do not intentionally or accidentally repeat the degraded response pattern"
+                    "Do not deliver an intentionally degraded response, and do not accidentally repeat the degraded response pattern"
                 ),
-                "retry request should explicitly block repeating the degraded pattern"
+                "retry request should explicitly block intentional degradation and repeated degraded patterns"
+            );
+            assert!(
+                request.body_contains_text(
+                    "If the draft looks shallow, generic, truncated, evasive, or under-verified"
+                ),
+                "retry request should require discarding shallow or under-verified drafts"
             );
             assert!(
                 request.body_contains_text(&format!(
