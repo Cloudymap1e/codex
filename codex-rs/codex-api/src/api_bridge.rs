@@ -8,6 +8,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::auth::PlanType;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::DegradedResponseError;
 use codex_protocol::error::RetryLimitReachedError;
 use codex_protocol::error::UnexpectedResponseError;
 use codex_protocol::error::UsageLimitReachedError;
@@ -22,6 +23,11 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::UsageNotIncluded => CodexErr::UsageNotIncluded,
         ApiError::Retryable { message, delay } => CodexErr::Stream(message, delay),
         ApiError::Stream(msg) => CodexErr::Stream(msg, None),
+        ApiError::DegradedResponse {
+            reasoning_output_tokens,
+        } => CodexErr::DegradedResponse(DegradedResponseError {
+            reasoning_output_tokens,
+        }),
         ApiError::ServerOverloaded => CodexErr::ServerOverloaded,
         ApiError::Api { status, message } => {
             let user_message = api_error_user_message(status, &message);

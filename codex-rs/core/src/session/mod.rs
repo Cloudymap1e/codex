@@ -3475,6 +3475,11 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn restore_history(&self, history: ContextManager) {
+        let mut state = self.state.lock().await;
+        state.restore_history(history);
+    }
+
     pub(crate) async fn current_window_id(&self) -> String {
         let state = self.state.lock().await;
         let thread_id = self.thread_id;

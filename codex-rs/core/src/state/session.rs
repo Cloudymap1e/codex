@@ -111,6 +111,11 @@ impl SessionState {
         self.history.clone()
     }
 
+    pub(crate) fn restore_history(&mut self, history: ContextManager) {
+        self.history = history;
+        self.auto_compact_window.clear_prefill();
+    }
+
     pub(crate) fn replace_history(
         &mut self,
         items: Vec<ResponseItem>,

@@ -29,6 +29,12 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 /// Limit UI error messages to a reasonable size while keeping useful context.
 const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024;
 
+const DEGRADED_RESPONSE_REASONING_TOKEN_COUNT: i64 = 516;
+
+pub fn is_degraded_response_reasoning_token_count(reasoning_output_tokens: i64) -> bool {
+    reasoning_output_tokens == DEGRADED_RESPONSE_REASONING_TOKEN_COUNT
+}
+
 #[derive(Error, Debug)]
 pub enum SandboxErr {
     /// Error from sandbox execution
@@ -80,6 +86,8 @@ pub enum CodexErr {
     /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
+    #[error("{0}")]
+    DegradedResponse(DegradedResponseError),
     #[error(
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
@@ -198,6 +206,7 @@ impl CodexErr {
             | CodexErr::ServerOverloaded
             | CodexErr::CyberPolicy { .. } => false,
             CodexErr::Stream(..)
+            | CodexErr::DegradedResponse(_)
             | CodexErr::Timeout
             | CodexErr::RequestTimeout
             | CodexErr::UnexpectedStatus(_)
@@ -272,6 +281,21 @@ impl CodexErr {
             _ => None,
         };
         http_status_code.as_ref().map(StatusCode::as_u16)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DegradedResponseError {
+    pub reasoning_output_tokens: i64,
+}
+
+impl std::fmt::Display for DegradedResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "model response quality guard exhausted automatic retries: reasoning output tokens={}",
+            self.reasoning_output_tokens
+        )
     }
 }
 

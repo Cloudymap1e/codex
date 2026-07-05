@@ -1,5 +1,12 @@
 # Rust/codex-rs
 
+## Global Codex install safety
+
+- Do not change the user's global/default `codex` command unless the user explicitly asks for that exact global change.
+- Do not repoint the global `codex` symlink/wrapper, run `npm link`, run `npm install -g` from a local/custom Codex build, or otherwise make an experimental/custom build the default `codex`.
+- Experimental or custom Codex builds must be run by explicit path or a project-local wrapper only.
+- If you need to intentionally upgrade the official global npm Codex install, first confirm that the user asked for a global official install change.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

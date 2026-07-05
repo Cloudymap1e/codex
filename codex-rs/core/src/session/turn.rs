@@ -17,6 +17,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context::DegradedResponseRetryInstructions;
 use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -84,6 +85,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::DegradedResponseError;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
@@ -124,6 +126,8 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+const MAX_DEGRADED_RESPONSE_RETRIES: usize = 20;
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -1098,16 +1102,36 @@ async fn run_sampling_request(
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut degraded_response_retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
+    let mut pending_degraded_retry: Option<(DegradedResponseError, usize)> = None;
     loop {
+        let history_snapshot = sess.clone_history().await;
+        let is_degraded_retry = pending_degraded_retry.is_some();
         let prompt_input = if let Some(input) = initial_input.take() {
             input
+        } else if is_degraded_retry {
+            original_input.clone().unwrap_or_else(|| {
+                history_snapshot
+                    .clone()
+                    .for_prompt(&turn_context.model_info.input_modalities)
+            })
         } else {
-            sess.clone_history()
-                .await
+            history_snapshot
+                .clone()
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        let mut prompt_input = prompt_input;
+        if let Some((degraded_response, retry_attempt)) = pending_degraded_retry.take() {
+            prompt_input.push(ContextualUserFragment::into(
+                DegradedResponseRetryInstructions::new(
+                    degraded_response.reasoning_output_tokens,
+                    retry_attempt,
+                    MAX_DEGRADED_RESPONSE_RETRIES,
+                ),
+            ));
+        }
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),
@@ -1140,6 +1164,30 @@ async fn run_sampling_request(
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
+            }
+            Err(CodexErr::DegradedResponse(e)) => {
+                sess.restore_history(history_snapshot).await;
+                if original_input.is_none() {
+                    original_input = Some(prompt.input);
+                }
+                if degraded_response_retries >= MAX_DEGRADED_RESPONSE_RETRIES {
+                    warn!(
+                        reasoning_output_tokens = e.reasoning_output_tokens,
+                        max_retries = MAX_DEGRADED_RESPONSE_RETRIES,
+                        "degraded response retry limit reached"
+                    );
+                    return Err(CodexErr::DegradedResponse(e));
+                }
+                degraded_response_retries += 1;
+                warn!(
+                    reasoning_output_tokens = e.reasoning_output_tokens,
+                    retry_attempt = degraded_response_retries,
+                    max_retries = MAX_DEGRADED_RESPONSE_RETRIES,
+                    "retrying degraded response"
+                );
+                pending_degraded_retry = Some((e, degraded_response_retries));
+                turn_context.turn_timing_state.record_sampling_retry();
+                continue;
             }
             Err(err) => err,
         };
@@ -1641,6 +1689,7 @@ async fn emit_streamed_assistant_text_delta(
     sess: &Session,
     turn_context: &TurnContext,
     plan_mode_state: Option<&mut PlanModeStreamState>,
+    deferred_events: Option<&mut Vec<DeferredAssistantOutputEvent>>,
     item_id: &str,
     parsed: ParsedAssistantTextDelta,
 ) {
@@ -1667,8 +1716,12 @@ async fn emit_streamed_assistant_text_delta(
         item_id: item_id.to_string(),
         delta: parsed.visible_text,
     };
-    sess.send_event(turn_context, EventMsg::AgentMessageContentDelta(event))
-        .await;
+    if let Some(deferred_events) = deferred_events {
+        deferred_events.push(DeferredAssistantOutputEvent::ContentDelta(event));
+    } else {
+        sess.send_event(turn_context, EventMsg::AgentMessageContentDelta(event))
+            .await;
+    }
 }
 
 /// Flush buffered assistant text parser state when an assistant message item ends.
@@ -1676,11 +1729,20 @@ async fn flush_assistant_text_segments_for_item(
     sess: &Session,
     turn_context: &TurnContext,
     plan_mode_state: Option<&mut PlanModeStreamState>,
+    deferred_events: Option<&mut Vec<DeferredAssistantOutputEvent>>,
     parsers: &mut AssistantMessageStreamParsers,
     item_id: &str,
 ) {
     let parsed = parsers.finish_item(item_id);
-    emit_streamed_assistant_text_delta(sess, turn_context, plan_mode_state, item_id, parsed).await;
+    emit_streamed_assistant_text_delta(
+        sess,
+        turn_context,
+        plan_mode_state,
+        deferred_events,
+        item_id,
+        parsed,
+    )
+    .await;
 }
 
 /// Flush any remaining buffered assistant text parser state at response completion.
@@ -1688,6 +1750,7 @@ async fn flush_assistant_text_segments_all(
     sess: &Session,
     turn_context: &TurnContext,
     mut plan_mode_state: Option<&mut PlanModeStreamState>,
+    mut deferred_events: Option<&mut Vec<DeferredAssistantOutputEvent>>,
     parsers: &mut AssistantMessageStreamParsers,
 ) {
     for (item_id, parsed) in parsers.drain_finished() {
@@ -1695,6 +1758,7 @@ async fn flush_assistant_text_segments_all(
             sess,
             turn_context,
             plan_mode_state.as_deref_mut(),
+            deferred_events.as_deref_mut(),
             &item_id,
             parsed,
         )
@@ -1849,6 +1913,74 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
+struct DeferredCompletedAssistantItem {
+    response_item: ResponseItem,
+    streamed_to_client: bool,
+}
+
+enum DeferredAssistantOutputEvent {
+    ItemStarted(TurnItem),
+    ContentDelta(AgentMessageContentDeltaEvent),
+    ItemCompleted(DeferredCompletedAssistantItem),
+}
+
+fn should_defer_completed_assistant_item(item: &ResponseItem, plan_mode: bool) -> bool {
+    !plan_mode && matches!(item, ResponseItem::Message { role, .. } if role == "assistant")
+}
+
+async fn flush_deferred_assistant_output_events(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_store: &codex_extension_api::ExtensionData,
+    deferred_events: &mut Vec<DeferredAssistantOutputEvent>,
+    last_agent_message: &mut Option<String>,
+) {
+    for deferred_event in deferred_events.drain(..) {
+        match deferred_event {
+            DeferredAssistantOutputEvent::ItemStarted(turn_item) => {
+                sess.emit_turn_item_started(turn_context, &turn_item).await;
+            }
+            DeferredAssistantOutputEvent::ContentDelta(event) => {
+                sess.send_event(turn_context, EventMsg::AgentMessageContentDelta(event))
+                    .await;
+            }
+            DeferredAssistantOutputEvent::ItemCompleted(deferred_item) => {
+                let DeferredCompletedAssistantItem {
+                    response_item,
+                    streamed_to_client,
+                } = deferred_item;
+                let Some(finalized_turn_item) = finalize_non_tool_response_item(
+                    sess,
+                    turn_context,
+                    TurnItemContributorPolicy::Run(turn_store),
+                    &response_item,
+                    /*plan_mode*/ false,
+                )
+                .await
+                else {
+                    continue;
+                };
+                let last_message = finalized_turn_item.facts.last_agent_message.clone();
+                let turn_item = finalized_turn_item.turn_item;
+                if !streamed_to_client {
+                    sess.emit_turn_item_started(turn_context, &turn_item).await;
+                }
+                sess.emit_turn_item_completed(turn_context, turn_item).await;
+                record_completed_response_item_with_finalized_facts(
+                    sess,
+                    turn_context,
+                    &response_item,
+                    Some(&finalized_turn_item.facts),
+                )
+                .await;
+                if let Some(last_message) = last_message {
+                    *last_agent_message = Some(last_message);
+                }
+            }
+        }
+    }
+}
+
 #[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
@@ -1937,6 +2069,7 @@ async fn try_run_sampling_request(
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
+    let mut deferred_assistant_output_events = Vec::new();
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
@@ -2006,6 +2139,7 @@ async fn try_run_sampling_request(
                         &sess,
                         &turn_context,
                         plan_mode_state.as_mut(),
+                        (!plan_mode).then_some(&mut deferred_assistant_output_events),
                         &mut assistant_message_stream_parsers,
                         &item_id,
                     )
@@ -2023,6 +2157,18 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
+                    continue;
+                }
+
+                if should_defer_completed_assistant_item(&item, plan_mode) {
+                    deferred_assistant_output_events.push(
+                        DeferredAssistantOutputEvent::ItemCompleted(
+                            DeferredCompletedAssistantItem {
+                                response_item: item,
+                                streamed_to_client: previously_streamed_item.is_some(),
+                            },
+                        ),
+                    );
                     continue;
                 }
 
@@ -2075,7 +2221,7 @@ async fn try_run_sampling_request(
                 if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
-                        last_agent_message,
+                        last_agent_message: last_agent_message.clone(),
                     });
                 }
             }
@@ -2105,6 +2251,8 @@ async fn try_run_sampling_request(
                 {
                     let mut turn_item = turn_item;
                     let stream_item_to_client = !defer_streamed_turn_items_for_contributors;
+                    let defer_assistant_output =
+                        !plan_mode && matches!(turn_item, TurnItem::AgentMessage(_));
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
                     if stream_item_to_client
@@ -2128,7 +2276,10 @@ async fn try_run_sampling_request(
                         seeded_item_id = Some(item_id);
                     }
                     if stream_item_to_client {
-                        if let Some(state) = plan_mode_state.as_mut()
+                        if defer_assistant_output {
+                            deferred_assistant_output_events
+                                .push(DeferredAssistantOutputEvent::ItemStarted(turn_item.clone()));
+                        } else if let Some(state) = plan_mode_state.as_mut()
                             && matches!(turn_item, TurnItem::AgentMessage(_))
                         {
                             let item_id = turn_item.id();
@@ -2147,6 +2298,7 @@ async fn try_run_sampling_request(
                                 &sess,
                                 &turn_context,
                                 Some(state),
+                                None,
                                 item_id,
                                 parsed,
                             )
@@ -2218,7 +2370,16 @@ async fn try_run_sampling_request(
                     &sess,
                     &turn_context,
                     plan_mode_state.as_mut(),
+                    (!plan_mode).then_some(&mut deferred_assistant_output_events),
                     &mut assistant_message_stream_parsers,
+                )
+                .await;
+                flush_deferred_assistant_output_events(
+                    &sess,
+                    &turn_context,
+                    turn_store.as_ref(),
+                    &mut deferred_assistant_output_events,
+                    &mut last_agent_message,
                 )
                 .await;
                 let budget_result = sess
@@ -2234,7 +2395,7 @@ async fn try_run_sampling_request(
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
-                    last_agent_message,
+                    last_agent_message: last_agent_message.clone(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -2251,6 +2412,7 @@ async fn try_run_sampling_request(
                             &sess,
                             &turn_context,
                             plan_mode_state.as_mut(),
+                            (!plan_mode).then_some(&mut deferred_assistant_output_events),
                             &item_id,
                             parsed,
                         )
@@ -2348,13 +2510,24 @@ async fn try_run_sampling_request(
     };
     drop(sampling_timing_guard);
 
-    flush_assistant_text_segments_all(
-        &sess,
-        &turn_context,
-        plan_mode_state.as_mut(),
-        &mut assistant_message_stream_parsers,
-    )
-    .await;
+    if !matches!(outcome, Err(CodexErr::DegradedResponse(_))) {
+        flush_assistant_text_segments_all(
+            &sess,
+            &turn_context,
+            plan_mode_state.as_mut(),
+            (!plan_mode).then_some(&mut deferred_assistant_output_events),
+            &mut assistant_message_stream_parsers,
+        )
+        .await;
+        flush_deferred_assistant_output_events(
+            &sess,
+            &turn_context,
+            turn_store.as_ref(),
+            &mut deferred_assistant_output_events,
+            &mut last_agent_message,
+        )
+        .await;
+    }
 
     let tool_blocking_timing_guard = if in_flight.is_empty() {
         None

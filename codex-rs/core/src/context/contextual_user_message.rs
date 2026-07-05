@@ -3,6 +3,7 @@ use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 
 use super::AdditionalContextUserFragment;
+use super::DegradedResponseRetryInstructions;
 use super::FragmentRegistration;
 use super::FragmentRegistrationProxy;
 use super::InternalModelContextFragment;
@@ -29,6 +30,9 @@ static USER_SHELL_COMMAND_REGISTRATION: FragmentRegistrationProxy<UserShellComma
     FragmentRegistrationProxy::new();
 static TURN_ABORTED_REGISTRATION: FragmentRegistrationProxy<TurnAborted> =
     FragmentRegistrationProxy::new();
+static DEGRADED_RESPONSE_RETRY_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<
+    DegradedResponseRetryInstructions,
+> = FragmentRegistrationProxy::new();
 static SUBAGENT_NOTIFICATION_REGISTRATION: FragmentRegistrationProxy<SubagentNotification> =
     FragmentRegistrationProxy::new();
 static INTERNAL_MODEL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<
@@ -53,6 +57,7 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &SKILL_INSTRUCTIONS_REGISTRATION,
     &USER_SHELL_COMMAND_REGISTRATION,
     &TURN_ABORTED_REGISTRATION,
+    &DEGRADED_RESPONSE_RETRY_INSTRUCTIONS_REGISTRATION,
     &SUBAGENT_NOTIFICATION_REGISTRATION,
     &INTERNAL_MODEL_CONTEXT_REGISTRATION,
     &RECOMMENDED_PLUGINS_REGISTRATION,

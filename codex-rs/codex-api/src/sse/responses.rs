@@ -8,6 +8,7 @@ use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
+use codex_protocol::error::is_degraded_response_reasoning_token_count;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
@@ -143,6 +144,13 @@ impl From<ResponseCompletedUsage> for TokenUsage {
                 .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
+    }
+}
+
+impl ResponseCompletedUsage {
+    fn degraded_reasoning_output_tokens(&self) -> Option<i64> {
+        let reasoning_tokens = self.output_tokens_details.as_ref()?.reasoning_tokens;
+        is_degraded_response_reasoning_token_count(reasoning_tokens).then_some(reasoning_tokens)
     }
 }
 
@@ -411,6 +419,15 @@ pub fn process_responses_event(
             if let Some(resp_val) = event.response {
                 match serde_json::from_value::<ResponseCompleted>(resp_val) {
                     Ok(resp) => {
+                        if let Some(reasoning_output_tokens) = resp
+                            .usage
+                            .as_ref()
+                            .and_then(ResponseCompletedUsage::degraded_reasoning_output_tokens)
+                        {
+                            return Err(ResponsesEventError::Api(ApiError::DegradedResponse {
+                                reasoning_output_tokens,
+                            }));
+                        }
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
@@ -813,6 +830,37 @@ mod tests {
                 assert_eq!(msg, "stream closed before response.completed")
             }
             other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn detects_degraded_completed_reasoning_token_signatures() {
+        for reasoning_output_tokens in [516] {
+            let completed = json!({
+                "type": "response.completed",
+                "response": {
+                    "id": format!("resp-{reasoning_output_tokens}"),
+                    "usage": {
+                        "input_tokens": 10,
+                        "input_tokens_details": null,
+                        "output_tokens": 20,
+                        "output_tokens_details": {"reasoning_tokens": reasoning_output_tokens},
+                        "total_tokens": 30
+                    }
+                }
+            })
+            .to_string();
+
+            let sse = format!("event: response.completed\ndata: {completed}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+
+            assert_eq!(events.len(), 1);
+            assert_matches!(
+                &events[0],
+                Err(ApiError::DegradedResponse {
+                    reasoning_output_tokens: actual_reasoning_output_tokens
+                }) if *actual_reasoning_output_tokens == reasoning_output_tokens
+            );
         }
     }
 

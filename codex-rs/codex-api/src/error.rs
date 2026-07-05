@@ -12,6 +12,8 @@ pub enum ApiError {
     Api { status: StatusCode, message: String },
     #[error("stream error: {0}")]
     Stream(String),
+    #[error("model response matched degraded reasoning-token signature: {reasoning_output_tokens}")]
+    DegradedResponse { reasoning_output_tokens: i64 },
     #[error("context window exceeded")]
     ContextWindowExceeded,
     #[error("quota exceeded")]
