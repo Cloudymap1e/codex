@@ -1,7 +1,5 @@
 use super::*;
 
-const LOG_RETENTION_DAYS: i64 = 10;
-
 impl StateRuntime {
     pub async fn insert_log(&self, entry: &LogEntry) -> anyhow::Result<()> {
         self.insert_logs(std::slice::from_ref(entry)).await
@@ -285,27 +283,9 @@ WHERE id IN (
         Ok(())
     }
 
-    pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
-            .bind(cutoff_ts)
-            .execute(self.logs_pool.as_ref())
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     pub(crate) async fn run_logs_startup_maintenance(&self) -> anyhow::Result<()> {
-        let Some(cutoff) =
-            Utc::now().checked_sub_signed(chrono::Duration::days(LOG_RETENTION_DAYS))
-        else {
-            return Ok(());
-        };
-        self.delete_logs_before(cutoff.timestamp()).await?;
-        // Startup cleanup should not wait behind or block foreground work.
-        // PASSIVE checkpoints copy whatever is immediately available and skip
-        // frames that would require waiting on active readers or writers.
-        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-            .execute(self.logs_pool.as_ref())
-            .await?;
+        // Persistent SQLite diagnostics are disabled by default. Do not churn
+        // the log database at startup for a sink that normally retains nothing.
         Ok(())
     }
 

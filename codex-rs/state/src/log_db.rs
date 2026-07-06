@@ -52,7 +52,11 @@ const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn default_filter() -> Targets {
     Targets::new()
-        .with_default(LevelFilter::TRACE)
+        // Keep the persistent SQLite diagnostic sink off by default. The
+        // user-visible stderr/file log layers still honor their own filters;
+        // this sink is only for retained feedback diagnostics and can create
+        // sustained SQLite write churn during active sessions.
+        .with_default(LevelFilter::OFF)
         .with_target("log", LevelFilter::OFF)
         .with_target("codex_otel.log_only", LevelFilter::OFF)
         .with_target("codex_otel.trace_safe", LevelFilter::OFF)
